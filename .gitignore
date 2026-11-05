@@ -1,18 +1,19 @@
-# Secrets and per-deployment state: never commit
+# Per-install data lives in %APPDATA%\DormVPN Admin (keys, AWS ids, admin login).
+# These are the same files when the scripts are run from the repo without DORMVPN_DATA:
 secrets.json
-server/state.json
-server/state.deleted.json
-server/userdata.sh
+state.json
+admin.json
+users.json
+users.migrated.json
+userdata.sh
+engine/
 
-# Generated configs and packages (contain keys and the server IP)
-out/
+# Build output
+obj/
 dist/
 
-# Downloaded engine binaries
+# Engine binaries for local testing
 bin/
 
-# Build outputs
-windows-app/*.exe
-windows-app/*.ico
-
 *.log
+__pycache__/

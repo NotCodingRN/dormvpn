@@ -1,74 +1,83 @@
 # ZC-DormVPN
 
-A personal VPN on your own AWS server. Traffic looks like an ordinary HTTPS connection to a well-known website on TCP port 443 (VLESS + REALITY, using [sing-box](https://github.com/SagerNet/sing-box)). The server is tuned with BBR so it stays fast on lossy, long-distance routes. It comes with a Windows tray app and an Android setup page.
+Your own VPN on your own AWS account, for you and the people you choose. Traffic looks like an ordinary HTTPS connection to a well-known website on TCP port 443 (VLESS + REALITY, using [sing-box](https://github.com/SagerNet/sing-box)), so it works on networks that block normal VPNs.
 
-It's meant for one person: you, your laptop and your phone.
+It comes as two Windows apps:
 
-## Design
+- **DormVPN Admin** (for you): a setup wizard that builds everything in AWS, then a dashboard with the link and login for your web admin panel.
+- **DormVPN** (for your users): they sign in with the username and password you made for them, see how much data they've used against their limit, and connect. There's no sign-up.
 
-| Choice | Why |
+In the **web admin panel** you add and remove users, set each user's monthly data limit, set a cap for everyone together, see usage, and pause or start the server.
+
+## Getting started
+
+1. Run `.\build.ps1 -Install`. It builds both apps and puts **DormVPN Admin** on your Desktop and in the Start menu.
+2. Open DormVPN Admin. The wizard walks you through:
+   - installing the AWS CLI,
+   - creating an AWS access key and picking a region (it can measure which one is fastest from where you are),
+   - downloading sing-box 1.14.4 and putting its files in the folder it shows you,
+   - creating the VPN (5–10 minutes).
+3. At the end it shows your **admin panel link, username and generated password**. Open the panel and add users. Each new user gets a generated password to send them.
+4. Click **Build installer…** and send the zip to your users. They unzip it, double-click `install.cmd` and sign in.
+
+Phones: in the panel, click **Phone** next to a user to get a QR code for Hiddify (Android/iOS). Phones can't show usage, but the user's limit still applies.
+
+## How it fits together
+
+```
+ DormVPN Admin (your PC) ──aws cli──▶ creates everything below, shows the panel login
+                                       
+ Web admin panel ─┐                    
+ DormVPN app ─────┼─HTTPS─▶ API (Lambda + function URL) ◀──▶ DynamoDB: users, limits, usage
+ VPN server meter ┘                          │ start/stop
+                                             ▼
+ DormVPN app ═══════ VLESS+REALITY :443 ═══▶ VPN server (EC2 t3.micro, Elastic IP)
+```
+
+| Piece | What it does |
 |---|---|
-| TCP on port 443 only | Many restrictive networks drop UDP and unusual ports. WireGuard and other UDP VPNs fail there. |
-| VLESS + REALITY with a real site's name (default `www.microsoft.com`) | The connection presents a genuine TLS handshake for that site. Probes without your key are passed through to the real site. |
-| BBR congestion control on the server | Default TCP backs off hard on lossy routes. In testing on a ~50 ms lossy route, one connection went from 2–6 Mbps to about 26 Mbps. |
-| Elastic IP | The server address stays the same across redeploys, so clients don't need updating. |
-| `t3.micro` on Amazon Linux 2023 | Cheap, plenty for one user. Automatic security updates are on. |
+| API + panel (`server/api.py`, `server/panel.html`) | One Lambda function with a public HTTPS URL. Serves the admin panel, signs users in, hands the app its VPN settings and usage, and starts/stops the server. Keeps working while the VPN server is paused. |
+| User database | DynamoDB table `dormvpn`: users (passwords stored as PBKDF2 hashes), limits, monthly usage. |
+| VPN server | sing-box on Amazon Linux 2023 with BBR. No SSH port: it's managed with AWS SSM. |
+| Usage meter (`server/dormvpn-meter.py`) | Runs on the server every minute. Pulls the user list from the API, rebuilds sing-box's user list when it changes, counts each user's traffic with nftables, blocks anyone over their limit, reports usage back, and can pause the server when idle. |
+| `server/deploy.ps1` | Creates or updates all of the above. Safe to re-run: it only replaces the VPN instance when its setup changed, and the IP stays the same. |
 
-## Setup
+## Limits and costs
 
-1. Install the [AWS CLI](https://aws.amazon.com/cli/) and configure a profile.
-2. Download [sing-box 1.14.4](https://github.com/SagerNet/sing-box/releases/tag/v1.14.4) (`windows-amd64.zip`) and put `sing-box.exe`, `libcronet.dll` and `LICENSE` in `bin/`.
-3. Copy `secrets.example.json` to `secrets.json` and fill it in. Generate the values with `bin\sing-box.exe generate reality-keypair`, `generate uuid` and `generate rand 8 --hex`. Set `aws_profile` and `aws_region` to yours (pick the region with the lowest ping from where you are).
-4. Run `server\deploy.ps1` to create the server.
-5. Run `windows-app\build.ps1`, then double-click `dist\windows\install.cmd`.
-6. For a phone, run `python android\make_phone_page.py` (needs `pip install qrcode`) and open `dist\android\phone-setup.html`.
+- Usage is counted per calendar month (UTC) and resets on the 1st. "Used" is upload + download, because AWS charges both directions as data out.
+- A user who goes over their limit is cut off within a minute. Raising their limit lets them straight back in.
+- The **monthly cap** cuts everyone off once the total reaches it. Setting it at or under 100 GB keeps you in AWS's free data allowance.
+- **Auto-pause** stops the server after a set time with no traffic. With "Users can start a paused server" on, the app offers a **Start server** button, so the server only runs while someone uses it.
 
-`secrets.json`, `server/state.json`, `server/userdata.sh`, `out/` and `dist/` contain your keys and server address. They're in `.gitignore`. Don't commit or share them: anyone who has them can use your server.
-
-## Repository layout
-
-| Path | What it is |
-|---|---|
-| `server/userdata.template.sh` | Server bootstrap: installs a pinned, checksum-verified sing-box, sets up BBR and runs sing-box as an unprivileged service |
-| `server/deploy.ps1` | Creates or replaces the AWS server (security group, Elastic IP, instance). Re-running keeps the same IP |
-| `server/destroy.ps1` | Deletes the server, Elastic IP and security group |
-| `make-configs.ps1` | Generates the server, Windows, Android and test-client configs and the share link from `secrets.json` |
-| `windows-app/` | Tray app source (C#, builds with the .NET Framework compiler included in Windows), build and install scripts |
-| `android/make_phone_page.py` | Builds a phone setup page with a QR code for Hiddify, and steps for the official sing-box app |
-
-## Windows app
-
-The tray icon is a shield: **grey** = off, **orange** = connecting or reconnecting, **green** = connected. Double-click it to connect or disconnect. Right-click for options.
-
-- **Auto-reconnect:** every 30 seconds it checks that your public IP is the server's. If not, it reconnects. If the engine crashes, it restarts it with backoff.
-- **No leaks while reconnecting:** strict routing keeps traffic inside the VPN adapter while it reconnects. The only gap is a crash of the engine itself, which is restarted within about 2 seconds.
-- **Start at sign-in:** a Task Scheduler task, so there's no UAC prompt each time. Toggle it from the menu.
-- Don't run another VPN at the same time; two VPNs fight over routing.
-- Log: right-click → Open log (`C:\Program Files\DormVPN\dormvpn.log`).
-
-## Android
-
-- **Hiddify** (Google Play): scan the QR code on the setup page.
-- **Official sing-box app:** install it from the [sing-box releases](https://github.com/SagerNet/sing-box/releases/tag/v1.14.4), then import `dist/android/DormVPN.json`.
-
-## Cost
-
-AWS list prices in `eu-west-3` (Paris); other regions are similar:
+AWS list prices in `eu-west-3` (Paris):
 
 | Part | Per month |
 |---|---|
-| `t3.micro` instance ($0.0118/hour) | $8.61 |
-| Public IPv4 address ($0.005/hour) | $3.65 |
-| 8 GB gp3 disk | $0.74 |
-| Data out to the internet | First 100 GB free per account, then about $0.09/GB |
+| `t3.micro` instance, running all month | $8.61 (nothing while paused) |
+| Public IPv4 address | $3.65 |
+| 8 GB disk | $0.74 |
+| API, panel, database | a few cents |
+| Data out | first 100 GB free per account, then about $0.09/GB |
 
-You can stop the instance in the EC2 console when you're not using it, which removes the instance charge. The IP and disk keep billing.
+## Where things are
 
-## Maintenance
+| Path | What it is |
+|---|---|
+| `admin-app/` | DormVPN Admin source (C#, built with the .NET Framework compiler in Windows) |
+| `windows-app/` | DormVPN user app source, shared UI kit (`Ui.cs`), install/uninstall scripts |
+| `server/` | Scripts the admin app runs, the API, the panel, the server bootstrap and meter |
+| `%APPDATA%\DormVPN Admin` | Your install's keys, AWS resource ids, admin login (password encrypted for your Windows user), and the sing-box engine |
 
-- **Server IP blocked:** run `server\destroy.ps1` then `server\deploy.ps1` to get a new IP. Then rebuild and reinstall the Windows app, and re-scan the QR code on your phone.
-- **Rotating keys** (if a link leaked): generate new values, put them in `secrets.json`, run `server\deploy.ps1`, rebuild, reinstall and re-scan.
+Nothing secret is in the repo or in the user installer: users get their VPN key only after signing in.
+
+## Maintenance (in DormVPN Admin)
+
+- **Update server**: re-runs the deploy (after pulling a new version of this repo and rebuilding).
+- **New admin password**: generates a new one. The old one stops working.
+- **Change AWS keys**: back to the wizard's AWS step.
+- **Delete everything**: removes the server, IP, panel, database and roles from AWS.
+- A user's link or password leaked: **New password** in the panel signs them out everywhere. For the phone QR, delete and re-add the user.
 
 ## Use responsibly
 
-This is for securing your own traffic. Follow the rules of the networks you connect through, and the [AWS Acceptable Use Policy](https://aws.amazon.com/aup/). Whatever goes through the server is tied to your AWS account.
+This is for securing your own and your friends' traffic. Follow the rules of the networks you connect through and the [AWS Acceptable Use Policy](https://aws.amazon.com/aup/). Whatever goes through the server is tied to your AWS account.

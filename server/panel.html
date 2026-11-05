@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DormVPN Admin</title>
+<style>
+:root {
+  --bg: #f4f5f7; --card: #ffffff; --ink: #14171c; --muted: #5d6573; --line: #e2e5ea; --soft: #f0f2f5;
+  --accent: #1f9d55; --accent-ink: #ffffff; --warn: #c27c0e; --bad: #c8382f; --bar: #1f9d55; --shadow: 0 1px 2px rgba(16,24,40,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1114; --card: #171a1f; --ink: #eceff3; --muted: #98a1ad; --line: #272c33; --soft: #1e2228;
+          --accent: #2fb46a; --warn: #e0a23a; --bad: #ef6a60; --bar: #2fb46a; --shadow: none; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+header h1 { font-size: 20px; margin: 0; flex: 1; display: flex; align-items: center; gap: 10px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; box-shadow: var(--shadow); }
+.card h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.stat .k { color: var(--muted); font-size: 13px; }
+.stat .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+button, .btn { font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  padding: 7px 14px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+button:hover { background: var(--soft); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.primary:hover { filter: brightness(1.06); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .55; cursor: default; }
+input, select { font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink); width: 100%; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 4px; }
+.row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.row > div { flex: 1; min-width: 140px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 99px; background: var(--soft); color: var(--muted); }
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill.on { color: var(--accent); } .pill.wait { color: var(--warn); } .pill.off { color: var(--muted); } .pill.bad { color: var(--bad); }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+td { padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+.bar { height: 6px; background: var(--soft); border-radius: 99px; overflow: hidden; margin-top: 5px; min-width: 120px; }
+.bar > i { display: block; height: 100%; background: var(--bar); border-radius: 99px; }
+.bar.warn > i { background: var(--warn); } .bar.full > i { background: var(--bad); }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.actions button { padding: 5px 10px; font-size: 13px; }
+.login { max-width: 360px; margin: 12vh auto 0; }
+.login .card { padding: 26px; }
+.err { color: var(--bad); font-size: 14px; min-height: 20px; margin: 8px 0 0; }
+dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--ink); padding: 22px; width: min(440px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog h3 { margin: 0 0 12px; font-size: 17px; }
+.secret { font-family: ui-monospace, Consolas, monospace; font-size: 17px; background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; word-break: break-all; user-select: all; }
+.qr { background: #fff; padding: 12px; border-radius: 10px; width: 264px; margin: 6px auto 12px; }
+.qr img, .qr canvas { display: block; width: 240px; height: 240px; }
+.dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); margin: 0; }
+.toggle input { width: auto; }
+.hide { display: none !important; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+@media (max-width: 640px) {
+  thead { display: none; }
+  table, tbody, tr, td { display: block; width: 100%; }
+  tr { border-bottom: 1px solid var(--line); padding: 8px 0; } td { border: 0; padding: 4px 0; }
+  .actions { justify-content: flex-start; }
+}
+</style>
+</head>
+<body>
+<main>
+  <section id="loginView" class="login hide">
+    <div class="card">
+      <h2 style="font-size:19px;margin-bottom:4px">DormVPN Admin</h2>
+      <p class="muted small" style="margin:0 0 18px">Sign in with the admin account from the DormVPN Admin app.</p>
+      <form id="loginForm">
+        <label for="lu">Username</label><input id="lu" autocomplete="username" required>
+        <div style="height:10px"></div>
+        <label for="lp">Password</label><input id="lp" type="password" autocomplete="current-password" required>
+        <p class="err" id="loginErr"></p>
+        <button class="primary" style="width:100%" type="submit">Sign in</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="appView" class="hide">
+    <header>
+      <h1>DormVPN Admin <span id="srvPill" class="pill off">…</span></h1>
+      <button id="refreshBtn" title="Refresh">Refresh</button>
+      <button id="logoutBtn">Sign out</button>
+    </header>
+
+    <div class="card">
+      <h2>Server <span class="actions"><button id="startBtn" class="primary hide">Start server</button><button id="stopBtn" class="hide">Pause server</button></span></h2>
+      <div class="grid">
+        <div class="stat"><div class="k">Address</div><div class="v" id="srvIp" style="font-size:17px">–</div></div>
+        <div class="stat"><div class="k">Used this month</div><div class="v" id="totUsed">–</div><div class="small muted" id="totCap"></div></div>
+        <div class="stat"><div class="k">Estimated data cost</div><div class="v" id="totCost">–</div><div class="small muted">first 100 GB/month free</div></div>
+        <div class="stat"><div class="k">Resets</div><div class="v" id="resets" style="font-size:17px">–</div><div class="small muted" id="lastReport"></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Users <button class="primary" id="addBtn">Add user</button></h2>
+      <table>
+        <thead><tr><th>User</th><th>This month</th><th>Status</th><th></th></tr></thead>
+        <tbody id="users"></tbody>
+      </table>
+      <p class="muted small" id="noUsers" style="margin:6px 0 0">No users yet. Add one, then send them their username and password.</p>
+      <p class="muted small" style="margin:10px 0 0">Changes reach the VPN server within a minute.</p>
+    </div>
+
+    <div class="card">
+      <h2>Cost controls</h2>
+      <form id="settingsForm" class="row">
+        <div><label for="sCap">Monthly cap for everyone together (GB, 0 = none)</label><input id="sCap" type="number" min="0" step="1"></div>
+        <div><label for="sIdle">Auto-pause after idle minutes (0 = off)</label><input id="sIdle" type="number" min="0" step="5"></div>
+        <div style="flex:1.3"><label class="toggle"><input id="sWake" type="checkbox"> Users can start a paused server from the app</label></div>
+        <div style="flex:0"><button class="primary" type="submit">Save</button></div>
+      </form>
+      <p class="muted small" style="margin:10px 0 0">When the cap is reached everyone is cut off until the 1st. A paused server costs about $0.15/day instead of $0.43/day.</p>
+      <p class="muted small" id="history" style="margin:6px 0 0"></p>
+    </div>
+  </section>
+</main>
+
+<dialog id="addDlg">
+  <h3>Add user</h3>
+  <form id="addForm">
+    <label for="aName">Username</label><input id="aName" required pattern="[a-z0-9][a-z0-9_\-]{0,31}" placeholder="e.g. alex" autocomplete="off">
+    <div style="height:10px"></div>
+    <label for="aLimit">Monthly limit (GB, 0 = unlimited)</label><input id="aLimit" type="number" min="0" step="1" value="10">
+    <p class="muted small">A password is generated for them.</p>
+    <p class="err" id="addErr"></p>
+    <div class="dlg-actions"><button type="button" data-close>Cancel</button><button class="primary" type="submit">Add user</button></div>
+  </form>
+</dialog>
+
+<dialog id="pwDlg">
+  <h3 id="pwTitle">Send these to the user</h3>
+  <label>Username</label><div class="secret" id="pwUser"></div>
+  <div style="height:10px"></div>
+  <label>Password</label><div class="secret" id="pwPass"></div>
+  <p class="muted small">They sign in with these in the DormVPN app. This password isn't shown again; you can always reset it.</p>
+  <div class="dlg-actions"><button id="pwCopy">Copy both</button><button class="primary" data-close>Done</button></div>
+</dialog>
+
+<dialog id="limitDlg">
+  <h3>Monthly limit for <span id="limName"></span></h3>
+  <form id="limitForm">
+    <label for="limVal">GB per month (0 = unlimited)</label><input id="limVal" type="number" min="0" step="1">
+    <div class="dlg-actions"><button type="button" data-close>Cancel</button><button class="primary" type="submit">Save</button></div>
+  </form>
+</dialog>
+
+<dialog id="qrDlg">
+  <h3>Phone setup for <span id="qrName"></span></h3>
+  <p class="muted small" style="margin-top:0">Install <b>Hiddify</b> from Google Play or the App Store, tap <b>+</b> → <b>Scan QR code</b>.</p>
+  <div class="qr" id="qrBox"></div>
+  <p class="muted small">Anyone with this code can use this user's allowance. Phones can't show usage; the limit still applies.</p>
+  <div class="dlg-actions"><button id="qrCopy">Copy link</button><button class="primary" data-close>Done</button></div>
+</dialog>
+
+<dialog id="confirmDlg">
+  <h3 id="cfTitle"></h3>
+  <p id="cfText" class="muted"></p>
+  <div class="dlg-actions"><button data-close>Cancel</button><button class="primary" id="cfOk">OK</button></div>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSQX0FslNhTDadL4O5SAGapGt4FodqL8My0mA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+const $ = id => document.getElementById(id);
+let token = sessionStorage.getItem("dvpn_admin") || "";
+let state = null, qrLink = "";
+
+const gb = b => (b / 1e9).toFixed(b < 1e10 ? 2 : 1);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
+
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== "/api/admin/login") { signOut(); throw new Error(data.error || "Please sign in again."); }
+  if (!r.ok) throw new Error(data.error || ("Request failed (" + r.status + ")"));
+  return data;
+}
+
+function show(view) { $("loginView").classList.toggle("hide", view !== "login"); $("appView").classList.toggle("hide", view !== "app"); }
+function signOut() { token = ""; sessionStorage.removeItem("dvpn_admin"); show("login"); }
+
+$("loginForm").onsubmit = async e => {
+  e.preventDefault(); $("loginErr").textContent = "";
+  try {
+    const r = await api("POST", "/api/admin/login", { username: $("lu").value.trim(), password: $("lp").value });
+    token = r.token; sessionStorage.setItem("dvpn_admin", token); $("lp").value = ""; await load(); show("app");
+  } catch (err) { $("loginErr").textContent = err.message; }
+};
+$("logoutBtn").onclick = signOut;
+$("refreshBtn").onclick = () => load().then(() => toast("Up to date"));
+
+const STATES = { running: ["Running", "on"], pending: ["Starting", "wait"], stopping: ["Pausing", "wait"], stopped: ["Paused", "off"], "shutting-down": ["Shutting down", "bad"], terminated: ["Deleted", "bad"] };
+
+function render() {
+  const s = state, srv = s.server;
+  const [label, cls] = STATES[srv.state] || [srv.state, "bad"];
+  $("srvPill").textContent = label; $("srvPill").className = "pill " + cls;
+  $("startBtn").classList.toggle("hide", srv.state !== "stopped");
+  $("stopBtn").classList.toggle("hide", srv.state !== "running");
+  $("srvIp").textContent = srv.ip ? srv.ip + "  ·  " + srv.region : "–";
+  const total = s.users.reduce((a, u) => a + u.used, 0);
+  $("totUsed").textContent = gb(total) + " GB";
+  $("totCap").textContent = s.settings.monthly_cap_gb ? "of " + s.settings.monthly_cap_gb + " GB cap" : "no cap set";
+  $("totCost").textContent = "$" + (Math.max(0, total / 1e9 - 100) * 0.09).toFixed(2);
+  $("resets").textContent = new Date(s.resets + "T00:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  $("lastReport").textContent = srv.last_report ? "server reported " + ago(srv.last_report) : "";
+  $("noUsers").classList.toggle("hide", s.users.length > 0);
+  $("users").innerHTML = s.users.map(u => {
+    const pct = u.limit_gb ? Math.min(100, u.used / (u.limit_gb * 1e9) * 100) : 0;
+    const barCls = pct >= 100 ? "full" : pct >= 80 ? "warn" : "";
+    const status = !u.enabled ? '<span class="pill off">Off</span>' : u.blocked ? '<span class="pill bad">Limit reached</span>' : '<span class="pill on">Active</span>';
+    const lim = u.limit_gb ? gb(u.used) + " of " + u.limit_gb + " GB" : gb(u.used) + " GB · no limit";
+    const n = esc(u.name);
+    return `<tr><td><b>${n}</b></td>
+      <td><span class="small">${lim}</span>${u.limit_gb ? `<div class="bar ${barCls}"><i style="width:${pct}%"></i></div>` : ""}</td>
+      <td>${status}</td>
+      <td><div class="actions">
+        <button data-act="limit" data-u="${n}">Limit</button>
+        <button data-act="${u.enabled ? "off" : "on"}" data-u="${n}">${u.enabled ? "Turn off" : "Turn on"}</button>
+        <button data-act="pw" data-u="${n}">New password</button>
+        <button data-act="qr" data-u="${n}">Phone</button>
+        <button data-act="del" data-u="${n}" class="danger">Delete</button>
+      </div></td></tr>`;
+  }).join("");
+  $("sCap").value = s.settings.monthly_cap_gb; $("sIdle").value = s.settings.idle_stop_minutes; $("sWake").checked = !!s.settings.allow_wake;
+  $("history").textContent = s.history.length ? "Past months: " + s.history.map(h => h.month + " " + gb(h.total) + " GB").join(" · ") : "";
+}
+
+function ago(ts) { const m = Math.round((Date.now() / 1000 - ts) / 60); return m < 1 ? "just now" : m < 60 ? m + " min ago" : Math.round(m / 60) + " h ago"; }
+
+async function load() { state = await api("GET", "/api/admin/state"); render(); }
+
+function confirmBox(title, text, okLabel) {
+  return new Promise(res => {
+    $("cfTitle").textContent = title; $("cfText").textContent = text; $("cfOk").textContent = okLabel;
+    const d = $("confirmDlg"); d.returnValue = "";
+    $("cfOk").onclick = () => { d.close("ok"); };
+    d.onclose = () => res(d.returnValue === "ok"); d.showModal();
+  });
+}
+
+function showPassword(title, user, pw) {
+  $("pwTitle").textContent = title; $("pwUser").textContent = user; $("pwPass").textContent = pw;
+  $("pwCopy").onclick = () => navigator.clipboard.writeText("DormVPN\nUsername: " + user + "\nPassword: " + pw).then(() => toast("Copied"));
+  $("pwDlg").showModal();
+}
+
+$("users").onclick = async e => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const name = b.dataset.u, act = b.dataset.act, u = state.users.find(x => x.name === name);
+  try {
+    if (act === "limit") { $("limName").textContent = name; $("limVal").value = u.limit_gb; $("limitDlg").dataset.u = name; $("limitDlg").showModal(); return; }
+    if (act === "off" && await confirmBox("Turn off " + name + "?", "They're disconnected within a minute and signed out of the app. You can turn them back on any time.", "Turn off")) { await api("PATCH", "/api/admin/users/" + name, { enabled: false }); toast(name + " turned off"); }
+    if (act === "on") { await api("PATCH", "/api/admin/users/" + name, { enabled: true }); toast(name + " turned on"); }
+    if (act === "pw" && await confirmBox("New password for " + name + "?", "Their old password stops working and the app signs them out.", "Make new password")) {
+      const r = await api("PATCH", "/api/admin/users/" + name, { reset_password: true }); showPassword("New password for " + name, name, r.password);
+    }
+    if (act === "qr") {
+      const r = await api("GET", "/api/admin/users/" + name + "/link"); qrLink = r.link;
+      $("qrName").textContent = name; $("qrBox").innerHTML = "";
+      if (window.QRCode) new QRCode($("qrBox"), { text: qrLink, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.M });
+      else $("qrBox").textContent = "QR library didn't load. Use Copy link.";
+      $("qrDlg").showModal(); return;
+    }
+    if (act === "del" && await confirmBox("Delete " + name + "?", "Their account and key are removed for good. Their past usage stays in the monthly totals.", "Delete")) { await api("DELETE", "/api/admin/users/" + name); toast(name + " deleted"); }
+    await load();
+  } catch (err) { toast(err.message); }
+};
+
+$("qrCopy").onclick = () => navigator.clipboard.writeText(qrLink).then(() => toast("Link copied"));
+
+$("limitForm").onsubmit = async e => {
+  e.preventDefault(); const name = $("limitDlg").dataset.u;
+  try { await api("PATCH", "/api/admin/users/" + name, { limit_gb: Number($("limVal").value) || 0 }); $("limitDlg").close(); toast("Limit saved"); await load(); }
+  catch (err) { toast(err.message); }
+};
+
+$("addBtn").onclick = () => { $("addErr").textContent = ""; $("aName").value = ""; $("aLimit").value = 10; $("addDlg").showModal(); $("aName").focus(); };
+$("addForm").onsubmit = async e => {
+  e.preventDefault(); $("addErr").textContent = "";
+  try {
+    const r = await api("POST", "/api/admin/users", { name: $("aName").value.trim().toLowerCase(), limit_gb: Number($("aLimit").value) || 0 });
+    $("addDlg").close(); showPassword("Send these to " + r.name, r.name, r.password); await load();
+  } catch (err) { $("addErr").textContent = err.message; }
+};
+
+$("settingsForm").onsubmit = async e => {
+  e.preventDefault();
+  try { await api("POST", "/api/admin/settings", { monthly_cap_gb: Number($("sCap").value) || 0, idle_stop_minutes: Number($("sIdle").value) || 0, allow_wake: $("sWake").checked }); toast("Saved"); await load(); }
+  catch (err) { toast(err.message); }
+};
+
+async function serverAction(action) {
+  try { await api("POST", "/api/admin/server", { action }); toast(action === "start" ? "Starting, takes about a minute" : "Pausing"); await load(); poll(); }
+  catch (err) { toast(err.message); }
+}
+$("startBtn").onclick = () => serverAction("start");
+$("stopBtn").onclick = async () => { if (await confirmBox("Pause the server?", "Everyone is disconnected until it's started again.", "Pause")) serverAction("stop"); };
+
+let pollTimer; function poll() { clearTimeout(pollTimer); pollTimer = setTimeout(async () => { await load().catch(() => {}); if (["pending", "stopping"].includes(state.server.state)) poll(); }, 5000); }
+
+document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => b.closest("dialog").close());
+
+if (token) load().then(() => show("app")).catch(() => show("login")); else show("login");
+setInterval(() => { if (token && !document.hidden) load().catch(() => {}); }, 60000);
+</script>
+</body>
+</html>

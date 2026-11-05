@@ -1,5 +1,6 @@
 #!/bin/bash
-# DormVPN server bootstrap: sing-box VLESS + REALITY on TCP 443, BBR enabled.
+# DormVPN server bootstrap: sing-box VLESS + REALITY on TCP 443, BBR enabled,
+# per-user usage meter that syncs users and limits from the DormVPN API. No SSH needed.
 set -euo pipefail
 exec > /var/log/dormvpn-setup.log 2>&1
 
@@ -26,14 +27,25 @@ tar xzf sb.tgz
 install -m 0755 sing-box-1.14.4-linux-amd64/sing-box /usr/local/bin/sing-box
 
 useradd --system --no-create-home --shell /sbin/nologin singbox || true
-mkdir -p /etc/sing-box
-cat > /etc/sing-box/config.json <<'EOF'
-__SERVER_CONFIG__
-EOF
-chown -R root:singbox /etc/sing-box
+mkdir -p /etc/sing-box /etc/dormvpn /var/lib/dormvpn
+chown root:singbox /etc/sing-box
 chmod 0750 /etc/sing-box
-chmod 0640 /etc/sing-box/config.json
-/usr/local/bin/sing-box check -c /etc/sing-box/config.json
+chmod 0700 /etc/dormvpn /var/lib/dormvpn
+
+# sing-box settings without users (the meter adds the users it gets from the API)
+cat > /etc/dormvpn/singbox-base.json <<'EOF'
+__SERVER_BASE__
+EOF
+# where the API is and the token that proves this is the real server
+cat > /etc/dormvpn/dormvpn.json <<'EOF'
+__METER_CONF__
+EOF
+chmod 0600 /etc/dormvpn/*.json
+
+# --- per-user usage meter (syncs users, counts traffic with nftables, enforces limits)
+dnf -y install nftables python3
+echo '__METER_SCRIPT_B64__' | base64 -d | gunzip > /usr/local/bin/dormvpn-meter
+chmod 0755 /usr/local/bin/dormvpn-meter
 
 cat > /etc/systemd/system/sing-box.service <<'EOF'
 [Unit]
@@ -44,8 +56,9 @@ Wants=network-online.target
 [Service]
 User=singbox
 Group=singbox
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# NET_ADMIN lets sing-box mark each user's connections so the meter can count them
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
 NoNewPrivileges=true
 ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
 Restart=always
@@ -55,8 +68,46 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
+cat > /etc/systemd/system/dormvpn-meter-apply.service <<'EOF'
+[Unit]
+Description=DormVPN usage counters (rebuilt at boot)
+Before=sing-box.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dormvpn-meter apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/dormvpn-meter.service <<'EOF'
+[Unit]
+Description=DormVPN usage meter tick
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dormvpn-meter tick
+EOF
+cat > /etc/systemd/system/dormvpn-meter.timer <<'EOF'
+[Unit]
+Description=DormVPN usage meter, every minute
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOF
 systemctl daemon-reload
-systemctl enable --now sing-box
+# first tick writes the sing-box config with the current users and starts it
+/usr/local/bin/dormvpn-meter tick
+systemctl enable sing-box dormvpn-meter-apply.service
+systemctl enable --now dormvpn-meter.timer
+systemctl is-active sing-box
 
 # --- automatic security updates
 dnf -y install dnf-automatic || true
