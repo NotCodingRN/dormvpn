@@ -74,6 +74,11 @@ if ($LASTEXITCODE -ne 0) {
   aws dynamodb wait table-exists @p --table-name dormvpn
   Write-Host "created table dormvpn"
 }
+# sign-in lock records clean themselves up after a day
+$ttl = aws dynamodb describe-time-to-live @p --table-name dormvpn --query TimeToLiveDescription.TimeToLiveStatus --output text 2>$null
+if ($ttl -ne 'ENABLED' -and $ttl -ne 'ENABLING') {
+  aws dynamodb update-time-to-live @p --table-name dormvpn --time-to-live-specification "Enabled=true,AttributeName=expires" | Out-Null
+}
 Write-Host "ok"
 
 # ---------------------------------------------------------------- 5. API + admin panel

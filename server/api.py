@@ -97,8 +97,11 @@ def new_password():
     return "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(4))
 
 
-def sign(role, name, ver, ttl):
-    body = b64u(json.dumps({"r": role, "u": name, "v": int(ver), "e": int(time.time()) + ttl}).encode())
+def sign(role, name, ver, ttl, uid=None):
+    claims = {"r": role, "u": name, "v": int(ver), "e": int(time.time()) + ttl}
+    if uid is not None:
+        claims["i"] = uid
+    body = b64u(json.dumps(claims).encode())
     return body + "." + b64u(hmac.new(TOKEN_KEY, body.encode(), hashlib.sha256).digest())
 
 
@@ -184,23 +187,34 @@ def user_view(u, use, blocked):
             "blocked": u["name"] in blocked, "created": u.get("created", "")}
 
 
-def login_guard(key, ok):
-    """Locks an account for LOCK_SECONDS after LOCK_AFTER wrong passwords in a row."""
-    item = plain(TABLE.get_item(Key={"pk": key}).get("Item", {}))
+def client_ip(event):
+    return event.get("requestContext", {}).get("http", {}).get("sourceIp", "unknown")
+
+
+def login_check(account, ip):
+    """Refuses a sign-in while this account is locked for this IP address.
+
+    Locks are per account + IP: someone typing wrong passwords locks out only their own
+    address, so they can't keep the admin or another user out of their account."""
+    item = plain(TABLE.get_item(Key={"pk": "lock#%s#%s" % (account, ip)}).get("Item", {}))
     if item.get("lock_until", 0) > time.time():
         raise HttpError(429, "Too many wrong passwords. Try again in a few minutes.")
-    if ok:
-        if item.get("fails"):
-            TABLE.update_item(Key={"pk": key}, UpdateExpression="REMOVE fails, lock_until")
-        return
-    fails = item.get("fails", 0) + 1
-    expr, vals = "SET fails = :f", {":f": fails}
-    if fails >= LOCK_AFTER:
-        expr += ", lock_until = :l"
-        vals[":l"] = int(time.time()) + LOCK_SECONDS
-    if item:
-        TABLE.update_item(Key={"pk": key}, UpdateExpression=expr, ExpressionAttributeValues=vals)
+
+
+def login_failed(account, ip):
+    # atomic ADD, so parallel guesses can't all read the same count and slip past the limit
+    key = "lock#%s#%s" % (account, ip)
+    now = int(time.time())
+    a = plain(TABLE.update_item(Key={"pk": key}, UpdateExpression="ADD fails :one SET expires = :e",
+                                ExpressionAttributeValues={":one": 1, ":e": now + 86400}, ReturnValues="ALL_NEW")["Attributes"])
+    if a["fails"] >= LOCK_AFTER:
+        TABLE.update_item(Key={"pk": key}, UpdateExpression="SET lock_until = :l, fails = :z",
+                          ExpressionAttributeValues={":l": now + LOCK_SECONDS, ":z": 0})
     raise HttpError(401, "Wrong username or password.")
+
+
+def login_ok(account, ip):
+    TABLE.delete_item(Key={"pk": "lock#%s#%s" % (account, ip)})
 
 
 # ---------------------------------------------------------------- auth
@@ -220,7 +234,9 @@ def require_admin(event):
 def require_user(event):
     p = verify(bearer(event), "user")
     u = get_user(p["u"]) if p else None
-    if not u or p["v"] != u.get("ver", 0) or not u.get("enabled", True):
+    # "i" ties the token to this exact account: a deleted and re-created user with the
+    # same name gets a new id, so the old person's sessions don't carry over
+    if not u or p.get("i") != int(u.get("id", -1)) or p["v"] != u.get("ver", 0) or not u.get("enabled", True):
         raise HttpError(401, "You've been signed out. Sign in again.")
     return u
 
@@ -232,11 +248,13 @@ def require_server(event):
 
 # ---------------------------------------------------------------- routes: admin panel
 
-def admin_login(body):
+def admin_login(body, ip):
+    login_check("admin", ip)
     s = settings()
     name, pw = body.get("username", ""), body.get("password", "")
-    ok = bool(s.get("admin_hash")) and name == s.get("admin_user") and check_pw(pw, s["admin_hash"])
-    login_guard("settings", ok)
+    if not (s.get("admin_hash") and name == s.get("admin_user") and check_pw(pw, s["admin_hash"])):
+        login_failed("admin", ip)
+    login_ok("admin", ip)
     return {"token": sign("admin", name, s.get("admin_ver", 0), ADMIN_TTL)}
 
 
@@ -339,17 +357,18 @@ def admin_server(body):
 
 # ---------------------------------------------------------------- routes: client app
 
-def user_login(body):
+def user_login(body, ip):
     name = (body.get("username") or "").strip().lower()
-    u = get_user(name)
-    ok = bool(u) and check_pw(body.get("password", ""), u.get("pw", ""))
-    if not u:
-        time.sleep(0.3)
+    if not NAME_RE.match(name):
         raise HttpError(401, "Wrong username or password.")
-    login_guard("user#" + name, ok)
+    login_check("user#" + name, ip)
+    u = get_user(name)
+    if not u or not check_pw(body.get("password", ""), u.get("pw", "")):
+        login_failed("user#" + name, ip)
+    login_ok("user#" + name, ip)
     if not u.get("enabled", True):
         raise HttpError(403, "This account is turned off. Ask the person who runs the server.")
-    return {"token": sign("user", name, u.get("ver", 0), USER_TTL), "name": name}
+    return {"token": sign("user", name, u.get("ver", 0), USER_TTL, uid=int(u["id"])), "name": name}
 
 
 def user_me(u):
@@ -404,7 +423,7 @@ def direct(event):
     a = event["admin_action"]
     if a == "set_admin":
         TABLE.update_item(Key={"pk": "settings"},
-                          UpdateExpression="SET admin_user = :u, admin_hash = :h, admin_ver = if_not_exists(admin_ver, :z) + :one REMOVE fails, lock_until",
+                          UpdateExpression="SET admin_user = :u, admin_hash = :h, admin_ver = if_not_exists(admin_ver, :z) + :one",
                           ExpressionAttributeValues={":u": event["username"], ":h": hash_pw(event["password"]), ":z": 0, ":one": 1})
     elif a == "set_server":
         update("settings", {k: event[k] for k in ("instance_id", "ip", "public_key", "short_id", "sni", "region")})
@@ -452,9 +471,9 @@ def handler(event, context):
         if method == "GET" and path == "/":
             return respond(200, PANEL, "text/html; charset=utf-8")
         if method == "POST" and path == "/api/admin/login":
-            return respond(200, admin_login(body))
+            return respond(200, admin_login(body, client_ip(event)))
         if method == "POST" and path == "/api/login":
-            return respond(200, user_login(body))
+            return respond(200, user_login(body, client_ip(event)))
         if path.startswith("/api/server/"):
             require_server(event)
             if method == "GET" and path == "/api/server/sync":
