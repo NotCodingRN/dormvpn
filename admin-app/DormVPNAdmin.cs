@@ -42,7 +42,10 @@ namespace DormVPN.Admin
     static class Paths
     {
         public static readonly string App = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
-        public static readonly string Data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DormVPN Admin");
+        // everything stays inside the cloned folder: <folder>pp (this exe), <folder>\data, <folder>\installers
+        public static readonly string Root = Path.GetDirectoryName(App);
+        public static readonly string Data = Path.Combine(Root, "data");
+        public static string Installers { get { return Path.Combine(Root, "installers"); } }
         public static string Scripts { get { return Path.Combine(App, "scripts"); } }
         public static string Client { get { return Path.Combine(App, "client"); } }
         public static string Engine { get { return Path.Combine(Data, "engine"); } }
@@ -656,7 +659,8 @@ namespace DormVPN.Admin
         {
             var missing = new[] { Path.Combine(Paths.Client, "DormVPN.exe"), Path.Combine(Paths.Engine, "sing-box.exe"), Path.Combine(Paths.Engine, "libcronet.dll") }.Where(f => !File.Exists(f)).ToList();
             if (missing.Count > 0) { MessageBox.Show(this, "Missing: " + string.Join(", ", missing), "DormVPN Admin", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-            using (var dlg = new SaveFileDialog { FileName = "DormVPN-Setup.zip", Filter = "Zip file|*.zip", InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop) })
+            Directory.CreateDirectory(Paths.Installers);
+            using (var dlg = new SaveFileDialog { FileName = "DormVPN-Setup.zip", Filter = "Zip file|*.zip", InitialDirectory = Paths.Installers })
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 var stage = Path.Combine(Path.GetTempPath(), "dormvpn-client-" + Guid.NewGuid().ToString("N"));

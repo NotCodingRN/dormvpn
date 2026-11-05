@@ -1,10 +1,10 @@
 # Shared helpers for deploy.ps1 / destroy.ps1 / admin-password.ps1. Dot-source it: . "$PSScriptRoot\common.ps1"
 #
 # Scripts live next to this file. Per-install data (keys, AWS resource ids, admin login) lives in
-# $env:DORMVPN_DATA, which the admin app sets to %APPDATA%\DormVPN Admin. Without it (running from
-# the repo) the repo root is used.
+# $env:DORMVPN_DATA, which the admin app sets to the data folder inside the cloned repo (<repo>\data).
+# Running a script straight from the repo's server folder uses that same folder.
 $script:scripts = $PSScriptRoot
-$script:data = if ($env:DORMVPN_DATA) { $env:DORMVPN_DATA } else { Split-Path -Parent $PSScriptRoot }
+$script:data = if ($env:DORMVPN_DATA) { $env:DORMVPN_DATA } else { Join-Path (Split-Path -Parent $PSScriptRoot) 'data' }
 $script:utf8 = New-Object Text.UTF8Encoding($false)
 New-Item -ItemType Directory -Force $script:data | Out-Null
 
@@ -24,9 +24,10 @@ function Get-AwsArgs { $s = Get-Secrets; @('--profile', $s.aws_profile, '--regio
 function Get-State { $st = Read-Json "$script:data\state.json"; if ($st) { $st } else { [pscustomobject]@{} } }
 function Save-State($st) { Save-Json $st "$script:data\state.json" }
 
-# sing-box.exe: the admin app's engine folder, or bin\ in the repo
+# sing-box.exe, which the setup wizard has you put in data\engine
 function Get-Engine {
-  foreach ($p in "$script:data\engine\sing-box.exe", "$(Split-Path -Parent $script:scripts)\bin\sing-box.exe") { if (Test-Path $p) { return $p } }
+  $p = "$script:data\engine\sing-box.exe"
+  if (Test-Path $p) { return $p }
   throw "sing-box.exe not found. Put it in $script:data\engine (the setup wizard explains how)."
 }
 

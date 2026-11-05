@@ -1,12 +1,15 @@
 # Builds both Windows apps with the C# compiler that ships with Windows (no SDK needed).
-#   dist\DormVPN Admin\   the admin app (+ the scripts it runs and the user app it packages)
+# Everything stays inside this folder:
+#   app\          the built admin app, the scripts it runs and the user app it packages
+#   data\         your keys, settings and the sing-box engine (created by the app, never in git)
+#   installers\   the user installers you build from the app
 # Usage: .\build.ps1            build only
-#        .\build.ps1 -Install   also install the admin app for this Windows user, with Desktop + Start menu shortcuts
+#        .\build.ps1 -Install   also add DormVPN Admin shortcuts to the Desktop and Start menu
 param([switch]$Install)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-$out = Join-Path $root 'dist\DormVPN Admin'
+$out = Join-Path $root 'app'
 $obj = Join-Path $root 'obj'
 New-Item -ItemType Directory -Force $obj | Out-Null
 
@@ -37,7 +40,9 @@ if ($LASTEXITCODE -ne 0) { throw "DormVPN.exe failed to compile" }
   @refs '/r:System.IO.Compression.dll' '/r:System.IO.Compression.FileSystem.dll' "$root\admin-app\DormVPNAdmin.cs" "$root\windows-app\Ui.cs"
 if ($LASTEXITCODE -ne 0) { throw "DormVPN Admin.exe failed to compile" }
 
-# package
+# package (only app\ is replaced: data\ with your keys is never touched)
+$running = Get-Process 'DormVPN Admin' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$out\*" }
+if ($running) { $running | Stop-Process -Force; $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Force "$out\scripts", "$out\client" | Out-Null
 Copy-Item "$obj\DormVPN Admin.exe" $out
@@ -47,14 +52,9 @@ Copy-Item "$root\windows-app\install.cmd", "$root\windows-app\install.ps1", "$ro
 "built: $out"
 
 if ($Install) {
-  $dest = Join-Path $env:LOCALAPPDATA 'Programs\DormVPN Admin'
-  $running = Get-Process 'DormVPN Admin' -ErrorAction SilentlyContinue
-  if ($running) { $running | Stop-Process -Force; $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }
-  if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-  Copy-Item $out $dest -Recurse
   $sh = New-Object -ComObject WScript.Shell
   foreach ($lnk in "$([Environment]::GetFolderPath('Desktop'))\DormVPN Admin.lnk", "$([Environment]::GetFolderPath('Programs'))\DormVPN Admin.lnk") {
-    $s = $sh.CreateShortcut($lnk); $s.TargetPath = "$dest\DormVPN Admin.exe"; $s.WorkingDirectory = $dest; $s.Description = 'DormVPN Admin'; $s.Save()
+    $s = $sh.CreateShortcut($lnk); $s.TargetPath = "$out\DormVPN Admin.exe"; $s.WorkingDirectory = $out; $s.Description = 'DormVPN Admin'; $s.Save()
   }
-  "installed: $dest (shortcuts on the Desktop and in the Start menu)"
+  "shortcuts added to the Desktop and Start menu"
 }

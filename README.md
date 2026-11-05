@@ -11,14 +11,27 @@ In the **web admin panel** you add and remove users, set each user's monthly dat
 
 ## Getting started
 
-1. Run `.\build.ps1 -Install`. It builds both apps and puts **DormVPN Admin** on your Desktop and in the Start menu.
-2. Open DormVPN Admin. The wizard walks you through:
+You need Windows 10 or 11, [Git](https://git-scm.com/download/win), and an [AWS account](https://aws.amazon.com/). Nothing else: the apps build with the compiler that comes with Windows.
+
+Everything stays inside the folder you clone into, so pick where you want it. In PowerShell:
+
+```powershell
+git clone https://github.com/NotCodingRN/dormvpn.git D:\DormVPN
+cd D:\DormVPN
+powershell -ExecutionPolicy Bypass -File build.ps1 -Install
+```
+
+That builds both apps into `D:\DormVPN\app` and adds **DormVPN Admin** to your Desktop and Start menu.
+
+1. Open DormVPN Admin. The wizard walks you through:
    - installing the AWS CLI,
    - creating an AWS access key and picking a region (it can measure which one is fastest from where you are),
    - downloading sing-box 1.14.4 and putting its files in the folder it shows you,
    - creating the VPN (5–10 minutes).
-3. At the end it shows your **admin panel link, username and generated password**. Open the panel and add users. Each new user gets a generated password to send them.
-4. Click **Build installer…** and send the zip to your users. They unzip it, double-click `install.cmd` and sign in.
+2. At the end it shows your **admin panel link, username and generated password**. Open the panel and add users. Each new user gets a generated password to send them, and you add yourself the same way if you want to use the VPN.
+3. Click **Build installer…**. It saves `DormVPN-Setup.zip` in the `installers` folder. Send it to your users. They unzip it, double-click `install.cmd` and sign in.
+
+If you delete the folder, use **Delete everything** in the app first, or you lose the record of what to remove from AWS and it keeps billing.
 
 Phones: in the panel, click **Phone** next to a user to get a QR code for Hiddify (Android/iOS). Phones can't show usage, but the user's limit still applies.
 
@@ -66,16 +79,20 @@ AWS list prices in `eu-west-3` (Paris):
 | `admin-app/` | DormVPN Admin source (C#, built with the .NET Framework compiler in Windows) |
 | `windows-app/` | DormVPN user app source, shared UI kit (`Ui.cs`), install/uninstall scripts |
 | `server/` | Scripts the admin app runs, the API, the panel, the server bootstrap and meter |
-| `%APPDATA%\DormVPN Admin` | Your install's keys, AWS resource ids, admin login (password encrypted for your Windows user), and the sing-box engine |
+| `app\` | The built admin app (created by `build.ps1`, replaced on every build) |
+| `data\` | Your keys, AWS resource ids, admin login (password encrypted for your Windows user) and the sing-box engine. Created by the app, never in git. Back it up |
+| `installers\` | The `DormVPN-Setup.zip` files you build for your users |
+
+Two things live outside the folder because other programs own them: the AWS CLI keeps your access keys in `%USERPROFILE%\.aws`, and the DormVPN user app installs to `C:\Program Files\DormVPN`, since a VPN needs admin rights.
 
 Nothing secret is in the repo or in the user installer: users get their VPN key only after signing in.
 
 ## Maintenance (in DormVPN Admin)
 
-- **Update server**: re-runs the deploy (after pulling a new version of this repo and rebuilding).
+- **Update server**: re-runs the deploy. To get a new version first: `git pull`, then `powershell -ExecutionPolicy Bypass -File build.ps1`. Rebuilding never touches `data\`.
 - **New admin password**: generates a new one. The old one stops working.
 - **Change AWS keys**: back to the wizard's AWS step.
-- **Delete everything**: removes the server, IP, panel, database and roles from AWS.
+- **Delete everything**: removes the server, IP, panel, database, logs and roles from AWS, then checks that nothing is left. Quit DormVPN on this PC first, or it refuses: deleting the server you're connected through would cut your internet. Your AWS account and access keys aren't touched.
 - A user's link or password leaked: **New password** in the panel signs them out everywhere. For the phone QR, delete and re-add the user.
 
 ## Use responsibly

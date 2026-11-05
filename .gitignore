@@ -1,19 +1,11 @@
-# Per-install data lives in %APPDATA%\DormVPN Admin (keys, AWS ids, admin login).
-# These are the same files when the scripts are run from the repo without DORMVPN_DATA:
-secrets.json
-state.json
-admin.json
-users.json
-users.migrated.json
-userdata.sh
-engine/
+# Created when you build and use DormVPN. data\ holds your keys: never commit it.
+app/
+data/
+installers/
 
-# Build output
+# Build leftovers
 obj/
 dist/
-
-# Engine binaries for local testing
 bin/
-
 *.log
 __pycache__/

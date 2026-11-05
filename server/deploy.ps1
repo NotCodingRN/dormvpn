@@ -20,7 +20,7 @@ Write-Host "AWS account $acct, region $($s.aws_region)"
 
 # ---------------------------------------------------------------- 1. keys
 Step "keys"
-if (-not $s.uuid -or -not $s.reality_private_key -or -not $s.short_id) {
+if (-not $s.reality_private_key -or -not $s.reality_public_key -or -not $s.short_id) {
   $sb = Get-Engine
   $kp = & $sb generate reality-keypair
   Set-Field $s 'reality_private_key' (($kp | Select-String 'PrivateKey:\s*(\S+)').Matches[0].Groups[1].Value)
