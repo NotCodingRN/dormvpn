@@ -92,9 +92,13 @@ def check_pw(pw, stored):
 
 
 def new_password():
+    """16 random characters from a 56-letter alphabet: about 93 bits, too many to guess."""
     # readable: no 0/O/1/l/I
     alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     return "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(4))
+
+
+DUMMY_HASH = hash_pw(secrets.token_hex(16))
 
 
 def sign(role, name, ver, ttl, uid=None):
@@ -191,25 +195,31 @@ def client_ip(event):
     return event.get("requestContext", {}).get("http", {}).get("sourceIp", "unknown")
 
 
-def login_check(account, ip):
-    """Refuses a sign-in while this account is locked for this IP address.
+def login_attempt(account, ip):
+    """Counts a sign-in attempt *before* the password is checked, and refuses it if this
+    account + IP address is locked or has used up its attempts.
 
-    Locks are per account + IP: someone typing wrong passwords locks out only their own
-    address, so they can't keep the admin or another user out of their account."""
-    item = plain(TABLE.get_item(Key={"pk": "lock#%s#%s" % (account, ip)}).get("Item", {}))
-    if item.get("lock_until", 0) > time.time():
+    The count is reserved with one conditional atomic update, so parallel requests can't
+    all get through before the lock is written. Locks are per account + IP: someone typing
+    wrong passwords only locks out their own address, not the admin or the real user.
+    (Spreading guesses over many addresses doesn't help an attacker: every password is
+    generated with ~93 bits of randomness, see new_password.)"""
+    key = "lock#%s#%s" % (account, ip)
+    now = int(time.time())
+    try:
+        a = plain(TABLE.update_item(
+            Key={"pk": key}, UpdateExpression="ADD fails :one SET expires = :e",
+            ConditionExpression="attribute_not_exists(lock_until) OR lock_until < :now",
+            ExpressionAttributeValues={":one": 1, ":e": now + 86400, ":now": now}, ReturnValues="ALL_NEW")["Attributes"])
+    except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
+        raise HttpError(429, "Too many wrong passwords. Try again in a few minutes.")
+    if a["fails"] > LOCK_AFTER:
+        TABLE.update_item(Key={"pk": key}, UpdateExpression="SET lock_until = :l, fails = :z",
+                          ExpressionAttributeValues={":l": now + LOCK_SECONDS, ":z": 0})
         raise HttpError(429, "Too many wrong passwords. Try again in a few minutes.")
 
 
-def login_failed(account, ip):
-    # atomic ADD, so parallel guesses can't all read the same count and slip past the limit
-    key = "lock#%s#%s" % (account, ip)
-    now = int(time.time())
-    a = plain(TABLE.update_item(Key={"pk": key}, UpdateExpression="ADD fails :one SET expires = :e",
-                                ExpressionAttributeValues={":one": 1, ":e": now + 86400}, ReturnValues="ALL_NEW")["Attributes"])
-    if a["fails"] >= LOCK_AFTER:
-        TABLE.update_item(Key={"pk": key}, UpdateExpression="SET lock_until = :l, fails = :z",
-                          ExpressionAttributeValues={":l": now + LOCK_SECONDS, ":z": 0})
+def login_failed():
     raise HttpError(401, "Wrong username or password.")
 
 
@@ -249,11 +259,13 @@ def require_server(event):
 # ---------------------------------------------------------------- routes: admin panel
 
 def admin_login(body, ip):
-    login_check("admin", ip)
+    login_attempt("admin", ip)
     s = settings()
     name, pw = body.get("username", ""), body.get("password", "")
-    if not (s.get("admin_hash") and name == s.get("admin_user") and check_pw(pw, s["admin_hash"])):
-        login_failed("admin", ip)
+    # always run the hash so a wrong username takes as long as a wrong password
+    good = check_pw(pw, s.get("admin_hash") or DUMMY_HASH)
+    if not (s.get("admin_hash") and name == s.get("admin_user") and good):
+        login_failed()
     login_ok("admin", ip)
     return {"token": sign("admin", name, s.get("admin_ver", 0), ADMIN_TTL)}
 
@@ -281,9 +293,7 @@ def admin_add_user(body):
     if get_user(name):
         raise HttpError(409, "There's already a user called %s." % name)
     limit = float(body.get("limit_gb") or 0)
-    pw = body.get("password") or new_password()
-    if len(pw) < 8:
-        raise HttpError(400, "Passwords need at least 8 characters.")
+    pw = new_password()  # always generated (~93 bits), so passwords can't be guessed
     uid = int(update("settings", {}, {"next_id": 1})["next_id"])
     TABLE.put_item(Item={"pk": "user#" + name, "name": name, "id": uid, "uuid": str(uuidlib.uuid4()),
                          "pw": hash_pw(pw), "limit_gb": Decimal(str(limit)), "enabled": True, "ver": 0,
@@ -304,9 +314,7 @@ def admin_edit_user(name, body):
         if not body["enabled"]:
             adds["ver"] = 1  # signs them out of the app
     if body.get("reset_password"):
-        pw = body.get("password") or new_password()
-        if len(pw) < 8:
-            raise HttpError(400, "Passwords need at least 8 characters.")
+        pw = new_password()
         sets["pw"] = hash_pw(pw)
         adds["ver"] = 1
         out["password"] = pw
@@ -361,10 +369,12 @@ def user_login(body, ip):
     name = (body.get("username") or "").strip().lower()
     if not NAME_RE.match(name):
         raise HttpError(401, "Wrong username or password.")
-    login_check("user#" + name, ip)
+    login_attempt("user#" + name, ip)
     u = get_user(name)
-    if not u or not check_pw(body.get("password", ""), u.get("pw", "")):
-        login_failed("user#" + name, ip)
+    # always run the hash so an unknown username takes as long as a wrong password
+    good = check_pw(body.get("password", ""), (u or {}).get("pw") or DUMMY_HASH)
+    if not u or not good:
+        login_failed()
     login_ok("user#" + name, ip)
     if not u.get("enabled", True):
         raise HttpError(403, "This account is turned off. Ask the person who runs the server.")
