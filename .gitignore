@@ -1,0 +1,18 @@
+# Secrets and per-deployment state: never commit
+secrets.json
+server/state.json
+server/state.deleted.json
+server/userdata.sh
+
+# Generated configs and packages (contain keys and the server IP)
+out/
+dist/
+
+# Downloaded engine binaries
+bin/
+
+# Build outputs
+windows-app/*.exe
+windows-app/*.ico
+
+*.log
