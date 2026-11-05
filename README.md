@@ -1,4 +1,4 @@
-# DormVPN
+# ZC-DormVPN
 
 A personal VPN on your own AWS server. Traffic looks like an ordinary HTTPS connection to a well-known website on TCP port 443 (VLESS + REALITY, using [sing-box](https://github.com/SagerNet/sing-box)). The server is tuned with BBR so it stays fast on lossy, long-distance routes. It comes with a Windows tray app and an Android setup page.
 
