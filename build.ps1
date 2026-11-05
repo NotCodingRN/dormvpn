@@ -48,7 +48,8 @@ Copy-Item "$root\windows-app\install.cmd", "$root\windows-app\install.ps1", "$ro
 
 if ($Install) {
   $dest = Join-Path $env:LOCALAPPDATA 'Programs\DormVPN Admin'
-  Get-Process 'DormVPN Admin' -ErrorAction SilentlyContinue | Stop-Process -Force
+  $running = Get-Process 'DormVPN Admin' -ErrorAction SilentlyContinue
+  if ($running) { $running | Stop-Process -Force; $running | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }
   if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
   Copy-Item $out $dest -Recurse
   $sh = New-Object -ComObject WScript.Shell
