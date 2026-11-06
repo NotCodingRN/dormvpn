@@ -17,8 +17,8 @@ using DormVPN.Shared;
 
 [assembly: System.Reflection.AssemblyTitle("DormVPN Admin")]
 [assembly: System.Reflection.AssemblyProduct("DormVPN")]
-[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
 
 namespace DormVPN.Admin
 {
@@ -566,12 +566,29 @@ namespace DormVPN.Admin
             NewPage(update ? "Update your VPN" : "Create your VPN",
                 "DormVPN Admin now creates the server, the admin panel and the user database in " + Regions.Label(Store.Region) +
                 " (AWS profile " + Store.Profile + "). This takes 5–10 minutes. You can watch below.");
+            // spending limit: a monthly AWS budget that emails you and stops the server at 100%
+            var secrets = Store.Read("secrets.json");
+            var lu = Ui.Text("Monthly spending limit (US$)", Theme.F(9), Theme.Muted); Add(lu, 36);
+            var usd = Add(new InputBox(false) { Width = 170 }, 36);
+            usd.Text = Json.Num(secrets, "budget_usd") > 0 ? Json.Num(secrets, "budget_usd").ToString() : "15";
+            var le = Ui.Text("Email for cost alerts", Theme.F(9), Theme.Muted); le.Location = new Point(222, lu.Top); page.Controls.Add(le);
+            var mail = new InputBox(false) { Width = W - Side - 222 - 36, Location = new Point(222, usd.Top) }; mail.Text = Json.Str(secrets, "budget_email"); page.Controls.Add(mail);
+            Para("At the limit the server stops itself. Normal running costs about $13 a month, plus data over 100 GB. Credits don't count towards it, so it works while you're still on credits.", Theme.Muted, 9f);
             log = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = Theme.Mono(9), BackColor = Theme.Card, ForeColor = Theme.Ink,
-                                Bounds = new Rectangle(36, y + 8, W - Side - 72, H - y - 120), BorderStyle = BorderStyle.FixedSingle };
+                                Bounds = new Rectangle(36, y + 4, W - Side - 72, H - y - 104), BorderStyle = BorderStyle.FixedSingle };
             page.Controls.Add(log);
             Footer(update ? "Update" : "Create my VPN", null);
             footerNext.Click += delegate
             {
+                double limit;
+                if (!double.TryParse(usd.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out limit) || limit < 5)
+                { footerStatus.ForeColor = Theme.Bad; footerStatus.Text = "Set a limit of at least $5."; return; }
+                if (!mail.Text.Contains("@") || mail.Text.Trim().Length < 5)
+                { footerStatus.ForeColor = Theme.Bad; footerStatus.Text = "Enter an email for cost alerts."; return; }
+                footerStatus.Text = "";
+                var saved = Store.Read("secrets.json");
+                saved["budget_usd"] = limit; saved["budget_email"] = mail.Text.Trim();
+                Store.Write("secrets.json", saved);
                 footerNext.Enabled = false; if (footerBack != null) footerBack.Enabled = false;
                 footerNext.Text = "Working…";
                 RunScript("deploy.ps1", "", ok =>

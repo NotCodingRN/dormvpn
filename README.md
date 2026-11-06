@@ -51,7 +51,7 @@ Phones: in the panel, click **Phone** next to a user to get a QR code for Hiddif
 |---|---|
 | API + panel (`server/api.py`, `server/panel.html`) | One Lambda function with a public HTTPS URL. Serves the admin panel, signs users in, hands the app its VPN settings and usage, and starts/stops the server. Keeps working while the VPN server is paused. |
 | User database | DynamoDB table `dormvpn`: users (passwords stored as PBKDF2 hashes), limits, monthly usage. |
-| VPN server | sing-box on Amazon Linux 2023 with BBR. No SSH port: it's managed with AWS SSM. |
+| VPN server | sing-box on Amazon Linux 2023 with BBR. No SSH port: it's managed with AWS SSM. It has IPv6 as well as IPv4 going out, because apps on phones and other dual-stack clients stop working if the exit can't reach IPv6 destinations. |
 | Usage meter (`server/dormvpn-meter.py`) | Runs on the server every minute. Pulls the user list from the API, rebuilds sing-box's user list when it changes, counts each user's traffic with nftables, blocks anyone over their limit, reports usage back, and can pause the server when idle. |
 | `server/deploy.ps1` | Creates or updates all of the above. Safe to re-run: it only replaces the VPN instance when its setup changed, and the IP stays the same. |
 
@@ -59,7 +59,8 @@ Phones: in the panel, click **Phone** next to a user to get a QR code for Hiddif
 
 - Usage is counted per calendar month (UTC) and resets on the 1st. "Used" is upload + download, because AWS charges both directions as data out.
 - A user who goes over their limit is cut off within a minute. Raising their limit lets them straight back in.
-- The **monthly cap** cuts everyone off once the total reaches it. Setting it at or under 100 GB keeps you in AWS's free data allowance.
+- The **monthly cap** cuts everyone off once the total reaches it. It starts at 90 GB, which keeps you inside AWS's free 100 GB of data (shared with anything else on the account).
+- The **spending limit** (set in the wizard, default $15/month) is an AWS budget for DormVPN's region only. It emails you at 80% and 100%, and at 100% the server stops itself. It counts real usage even while credits are paying. A stopped server still costs about $4.40/month for its IP and disk, and AWS updates budgets a few times a day, so the stop can land a little after the limit. Keep DormVPN in a region your other AWS projects don't use.
 - **Auto-pause** stops the server after a set time with no traffic. With "Users can start a paused server" on, the app offers a **Start server** button, so the server only runs while someone uses it.
 
 AWS list prices in `eu-west-3` (Paris):
@@ -71,6 +72,10 @@ AWS list prices in `eu-west-3` (Paris):
 | 8 GB disk | $0.74 |
 | API, panel, database | a few cents |
 | Data out | first 100 GB free per account, then about $0.09/GB |
+
+## If a site or app still refuses
+
+Your traffic leaves from an Amazon data-center address, and some services block those on purpose, whatever VPN you use. Reddit does, and Cloudflare-protected sites can show a check page or refuse you. That's the site's decision, not a network fault. Some apps also go by your VPN's country, so they act as if you're in the server's region.
 
 ## Where things are
 

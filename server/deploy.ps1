@@ -1,5 +1,5 @@
 # Creates or updates the whole DormVPN setup in AWS. Safe to re-run.
-#   - VPN server: security group (TCP 443), Elastic IP (stable address), t3.micro instance
+#   - VPN server: security group (TCP 443), Elastic IP (stable address), IPv6, t3.micro instance
 #   - API + admin panel: DynamoDB table, Lambda function with a public HTTPS URL
 #   - IAM roles for both, the admin login (first run), and keys (first run)
 # The VPN instance is only replaced when its bootstrap changed (or with -ReplaceServer); the IP
@@ -49,6 +49,7 @@ if (-not $state.alloc) {
   Set-StateField 'ip' $eip.PublicIp
 }
 Write-Host "security group $($state.sg), address $($state.ip)"
+Initialize-IPv6 $state.sg $(if ((Get-InstanceState) -in 'running', 'stopped') { $state.iid } else { '' })
 
 # ---------------------------------------------------------------- 3. IAM roles
 Step "permissions"
@@ -223,5 +224,9 @@ if ($needNew) {
     if ($done -eq '1') { Write-Host "server is ready" } else { Write-Host "the server hasn't finished yet; it keeps going on its own" }
   } catch { Write-Host "couldn't check on the server: $($_.Exception.Message)" }
 }
+
+# ---------------------------------------------------------------- 10. spending limit
+Step "spending limit"
+try { Set-SpendLimit $state.iid } catch { Write-Host "WARNING: the spending limit isn't set: $($_.Exception.Message)" }
 
 Write-Host "`nDORMVPN_DEPLOYED $url"

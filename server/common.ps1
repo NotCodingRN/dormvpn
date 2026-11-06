@@ -50,7 +50,7 @@ function New-Password {
 # Writes a temp JSON file and returns a file:// URI for the AWS CLI (deleted by the caller)
 function New-JsonArg($obj) {
   $tmp = [IO.Path]::GetTempFileName()
-  [IO.File]::WriteAllText($tmp, ($obj | ConvertTo-Json -Depth 20 -Compress), $script:utf8)
+  [IO.File]::WriteAllText($tmp, (ConvertTo-Json -InputObject $obj -Depth 20 -Compress), $script:utf8)
   $tmp
 }
 function UriOf($path) { "file://$($path.Replace('\','/'))" }
@@ -157,4 +157,131 @@ function Initialize-Role([string]$name, [string]$service, [string[]]$managed, $i
   }
   if ($created) { Write-Host "created IAM role $name (waiting for it to propagate)"; Start-Sleep 12 }
   (aws iam get-role @ip --role-name $name --query Role.Arn --output text).Trim()
+}
+
+# ---------- spending limit ----------
+# A monthly AWS budget for this region only, so it never counts or touches other projects in the
+# account (keep DormVPN in a region they don't use). It emails at 80%, at 100% and when the forecast
+# goes over, and at 100% an AWS Budgets action stops the VPN server.
+# IncludeCredit is off on purpose: it counts real usage, otherwise it reads $0 until credits run out.
+function Set-SpendLimit([string]$InstanceId) {
+  $s = Get-Secrets
+  if (-not $s.budget_email) { Write-Host "no alert email set: skipping the spending limit"; return }
+  $usd = if ($s.budget_usd) { [double]$s.budget_usd } else { 15 }
+  $name = 'DormVPN-Spend-Limit'
+  $c = @('--profile', $s.aws_profile, '--region', 'us-east-1')
+  $acct = (aws sts get-caller-identity --profile $s.aws_profile --query Account --output text).Trim()
+  $role = Initialize-Role 'dormvpn-budget' 'budgets.amazonaws.com' @('arn:aws:iam::aws:policy/AWSBudgetsActions_RolePolicyForResourceAdministrationWithSSM') $null
+  $budget = New-JsonArg ([ordered]@{
+    BudgetName = $name; BudgetType = 'COST'; TimeUnit = 'MONTHLY'
+    BudgetLimit = [ordered]@{ Amount = "$usd"; Unit = 'USD' }
+    CostFilters = @{ Region = @($s.aws_region) }
+    CostTypes = @{ IncludeCredit = $false; IncludeRefund = $false }
+  })
+  try {
+    aws budgets describe-budget @c --account-id $acct --budget-name $name 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      aws budgets update-budget @c --account-id $acct --new-budget (UriOf $budget) | Out-Null
+    } else {
+      $who = @([ordered]@{ SubscriptionType = 'EMAIL'; Address = $s.budget_email })
+      $rule = { param($type, $pct) [ordered]@{ Notification = [ordered]@{ NotificationType = $type; ComparisonOperator = 'GREATER_THAN'; Threshold = $pct; ThresholdType = 'PERCENTAGE' }; Subscribers = $who } }
+      $notes = New-JsonArg @((& $rule 'ACTUAL' 80), (& $rule 'ACTUAL' 100), (& $rule 'FORECASTED' 100))
+      aws budgets create-budget @c --account-id $acct --budget (UriOf $budget) --notifications-with-subscribers (UriOf $notes) | Out-Null
+      Remove-Item $notes
+    }
+    if ($LASTEXITCODE -ne 0) { throw "could not save the budget" }
+  } finally { Remove-Item $budget -ErrorAction SilentlyContinue }
+  Write-Host "spending limit: `$$usd/month in $($s.aws_region), alerts at 80% and 100%"
+  if (-not $InstanceId) { return }
+
+  $def = New-JsonArg @{ SsmActionDefinition = [ordered]@{ ActionSubType = 'STOP_EC2_INSTANCES'; Region = $s.aws_region; InstanceIds = @($InstanceId) } }
+  try {
+    $action = aws budgets describe-budget-actions-for-budget @c --account-id $acct --budget-name $name --query "Actions[0].ActionId" --output text
+    if ($action -and "$action" -ne 'None') {
+      aws budgets update-budget-action @c --account-id $acct --budget-name $name --action-id $action --definition (UriOf $def) | Out-Null
+    } else {
+      $subs = New-JsonArg @([ordered]@{ SubscriptionType = 'EMAIL'; Address = $s.budget_email })
+      try {
+        aws budgets create-budget-action @c --account-id $acct --budget-name $name --notification-type ACTUAL --action-type RUN_SSM_DOCUMENTS `
+          --action-threshold "ActionThresholdValue=100,ActionThresholdType=PERCENTAGE" --definition (UriOf $def) `
+          --execution-role-arn $role --approval-model AUTOMATIC --subscribers (UriOf $subs) | Out-Null
+      } finally { Remove-Item $subs -ErrorAction SilentlyContinue }
+    }
+    if ($LASTEXITCODE -ne 0) { throw "could not set the auto-stop" }
+  } finally { Remove-Item $def -ErrorAction SilentlyContinue }
+  Write-Host "auto-stop: server $InstanceId stops itself at 100% of the limit"
+}
+
+# ---------- IPv6 ----------
+# Phones and other dual-stack clients send IPv6 destinations through the tunnel. Their VPN app accepts
+# the connection locally, so if the server can't reach IPv6 the app sees a connection that dies and
+# never falls back to IPv4: those apps just don't work. So the server gets real IPv6 outbound.
+# IPv6 addresses are free on AWS. Safe to re-run. Inbound stays TCP 443 over IPv4 only.
+function Initialize-IPv6([string]$SecurityGroup, [string]$InstanceId) {
+  $p = Get-AwsArgs
+  $vpc = (aws ec2 describe-vpcs @p --filters Name=isDefault,Values=true --query "Vpcs[0].VpcId" --output text).Trim()
+  $q = "Vpcs[0].Ipv6CidrBlockAssociationSet[?Ipv6CidrBlockState.State=='associated'].Ipv6CidrBlock | [0]"
+  $cidr = "$(aws ec2 describe-vpcs @p --vpc-ids $vpc --query $q --output text)".Trim()
+  if (-not $cidr -or $cidr -eq 'None') {
+    aws ec2 associate-vpc-cidr-block @p --vpc-id $vpc --amazon-provided-ipv6-cidr-block | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "could not add IPv6 to the VPC" }
+    for ($i = 0; $i -lt 20; $i++) {
+      Start-Sleep 3
+      $cidr = "$(aws ec2 describe-vpcs @p --vpc-ids $vpc --query $q --output text)".Trim()
+      if ($cidr -and $cidr -ne 'None') { break }
+    }
+    if (-not $cidr -or $cidr -eq 'None') { throw "the VPC's IPv6 range never became ready" }
+  }
+  Write-Host "IPv6 range: $cidr"
+
+  # each subnet gets its own /64 out of the VPC's /56
+  $base = $cidr -replace '00::/56$', ''
+  $subnets = aws ec2 describe-subnets @p --filters "Name=vpc-id,Values=$vpc" --query "Subnets[].[SubnetId,Ipv6CidrBlockAssociationSet[?Ipv6CidrBlockState.State=='associated'].Ipv6CidrBlock | [0]]" --output text
+  $used = @($subnets | ForEach-Object { ($_ -split '\s+')[1] } | Where-Object { $_ -and $_ -ne 'None' })
+  $n = 0
+  foreach ($line in $subnets) {
+    $id, $has = $line -split '\s+'
+    if (-not $has -or $has -eq 'None') {
+      do { $block = "$base{0:x2}::/64" -f $n; $n++ } while ($used -contains $block)
+      aws ec2 associate-subnet-cidr-block @p --subnet-id $id --ipv6-cidr-block $block | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "could not add IPv6 to subnet $id" }
+      Start-Sleep 2
+    }
+    aws ec2 modify-subnet-attribute @p --subnet-id $id --assign-ipv6-address-on-creation | Out-Null
+  }
+
+  $rt = (aws ec2 describe-route-tables @p --filters "Name=vpc-id,Values=$vpc" Name=association.main,Values=true --query "RouteTables[0].RouteTableId" --output text).Trim()
+  $has = "$(aws ec2 describe-route-tables @p --route-table-ids $rt --query "RouteTables[0].Routes[?DestinationIpv6CidrBlock=='::/0'].State | [0]" --output text)".Trim()
+  if ($has -eq 'None' -or -not $has) {
+    $igw = (aws ec2 describe-internet-gateways @p --filters "Name=attachment.vpc-id,Values=$vpc" --query "InternetGateways[0].InternetGatewayId" --output text).Trim()
+    aws ec2 create-route @p --route-table-id $rt --destination-ipv6-cidr-block '::/0' --gateway-id $igw | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "could not add the IPv6 route" }
+  }
+
+  $eg = "$(aws ec2 describe-security-groups @p --group-ids $SecurityGroup --query "SecurityGroups[0].IpPermissionsEgress[?Ipv6Ranges[?CidrIpv6=='::/0']] | [0].IpProtocol" --output text)".Trim()
+  if ($eg -eq 'None' -or -not $eg) {
+    aws ec2 authorize-security-group-egress @p --group-id $SecurityGroup --ip-permissions 'IpProtocol=-1,Ipv6Ranges=[{CidrIpv6=::/0,Description=DormVPN}]' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "could not allow IPv6 out of the firewall" }
+  }
+
+  # the default network ACL only gets IPv6 rules automatically if it was never edited
+  $acl = (aws ec2 describe-network-acls @p --filters "Name=vpc-id,Values=$vpc" Name=default,Values=true --query "NetworkAcls[0].NetworkAclId" --output text).Trim()
+  foreach ($dir in '--ingress', '--egress') {
+    $flag = if ($dir -eq '--egress') { 'true' } else { 'false' }
+    $rule = "$(aws ec2 describe-network-acls @p --network-acl-ids $acl --query "NetworkAcls[0].Entries[?Egress==``$flag`` && Ipv6CidrBlock=='::/0' && RuleAction=='allow'].RuleNumber | [0]" --output text)".Trim()
+    if ($rule -eq 'None' -or -not $rule) {
+      aws ec2 create-network-acl-entry @p --network-acl-id $acl $dir --rule-number 101 --protocol -1 --rule-action allow --ipv6-cidr-block '::/0' | Out-Null
+    }
+  }
+
+  if ($InstanceId) {
+    $q6 = "Reservations[0].Instances[0].NetworkInterfaces[0].[NetworkInterfaceId,Ipv6Addresses[0].Ipv6Address]"
+    $eni, $addr = (aws ec2 describe-instances @p --instance-ids $InstanceId --query $q6 --output text) -split '\s+'
+    if (-not $addr -or $addr -eq 'None') {
+      aws ec2 assign-ipv6-addresses @p --network-interface-id $eni --ipv6-address-count 1 | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "could not give the server an IPv6 address" }
+      $addr = "$(aws ec2 describe-network-interfaces @p --network-interface-ids $eni --query "NetworkInterfaces[0].Ipv6Addresses[0].Ipv6Address" --output text)".Trim()
+    }
+    Write-Host "server IPv6 address: $addr"
+  }
 }

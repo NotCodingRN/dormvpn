@@ -58,6 +58,13 @@ aws dynamodb describe-table @p --table-name dormvpn 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) { if (Retry { aws dynamodb delete-table @p --table-name dormvpn | Out-Null }) { Write-Host "user database deleted" } }
 aws logs delete-log-group @p --log-group-name /aws/lambda/dormvpn-api 2>$null
 
+# ---------- spending limit
+$c = @('--profile', $s.aws_profile, '--region', 'us-east-1')
+$acct = (aws sts get-caller-identity --profile $s.aws_profile --query Account --output text).Trim()
+$acts = aws budgets describe-budget-actions-for-budget @c --account-id $acct --budget-name DormVPN-Spend-Limit --query "Actions[].ActionId" --output text 2>$null
+foreach ($a in @("$acts" -split '\s+' | Where-Object { $_ -and $_ -ne 'None' })) { aws budgets delete-budget-action @c --account-id $acct --budget-name DormVPN-Spend-Limit --action-id $a 2>$null | Out-Null }
+aws budgets delete-budget @c --account-id $acct --budget-name DormVPN-Spend-Limit 2>$null
+
 # ---------- IAM roles (free, but no reason to leave them behind)
 aws iam remove-role-from-instance-profile @ip --instance-profile-name dormvpn-ssm --role-name dormvpn-ssm 2>$null
 aws iam delete-instance-profile @ip --instance-profile-name dormvpn-ssm 2>$null
@@ -66,6 +73,8 @@ aws iam delete-role @ip --role-name dormvpn-ssm 2>$null
 aws iam detach-role-policy @ip --role-name dormvpn-api --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole 2>$null
 aws iam delete-role-policy @ip --role-name dormvpn-api --policy-name dormvpn-api-policy 2>$null
 aws iam delete-role @ip --role-name dormvpn-api 2>$null
+aws iam detach-role-policy @ip --role-name dormvpn-budget --policy-arn arn:aws:iam::aws:policy/AWSBudgetsActions_RolePolicyForResourceAdministrationWithSSM 2>$null
+aws iam delete-role @ip --role-name dormvpn-budget 2>$null
 
 # ---------- check, and only then forget this install
 Write-Host "`nchecking that nothing is left..."

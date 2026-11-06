@@ -144,7 +144,7 @@ def update(pk, sets, adds=None, remove=None):
 
 def settings():
     s = plain(TABLE.get_item(Key={"pk": "settings"}).get("Item", {}))
-    s.setdefault("monthly_cap_gb", 0)
+    s.setdefault("monthly_cap_gb", 90)  # stays inside the free 100 GB of data out
     s.setdefault("idle_stop_minutes", 0)
     s.setdefault("allow_wake", True)
     return s
