@@ -130,15 +130,26 @@ function ConvertFrom-B64Text([string]$text) {
 }
 
 # ---------- IAM ----------
-function Initialize-Role([string]$name, [string]$service, [string[]]$managed, $inline, [switch]$InstanceProfile) {
+function Initialize-Role([string]$name, [string]$service, [string[]]$managed, $inline, [switch]$InstanceProfile, $Condition) {
   $ip = @('--profile', (Get-Secrets).aws_profile)
+  $statement = @{ Effect = 'Allow'; Principal = @{ Service = $service }; Action = 'sts:AssumeRole' }
+  if ($Condition) { $statement.Condition = $Condition }
+  $trust = New-JsonArg @{ Version = '2012-10-17'; Statement = @($statement) }
   aws iam get-role @ip --role-name $name 2>$null | Out-Null
+  $exists = $LASTEXITCODE -eq 0
   $created = $false
-  if ($LASTEXITCODE -ne 0) {
-    $trust = New-JsonArg @{ Version = '2012-10-17'; Statement = @(@{ Effect = 'Allow'; Principal = @{ Service = $service }; Action = 'sts:AssumeRole' }) }
-    aws iam create-role @ip --role-name $name --assume-role-policy-document (UriOf $trust) --description "DormVPN" | Out-Null
+  if ($exists) {
+    # keeps the trust condition right on roles made by an older version
+    if ($Condition) {
+      aws iam update-assume-role-policy @ip --role-name $name --policy-document (UriOf $trust)
+      if ($LASTEXITCODE -ne 0) { Remove-Item $trust; throw "could not update the trust policy of $name" }
+    }
     Remove-Item $trust
-    if ($LASTEXITCODE -ne 0) { throw "could not create IAM role $name" }
+  } else {
+    aws iam create-role @ip --role-name $name --assume-role-policy-document (UriOf $trust) --description "DormVPN" | Out-Null
+    $rc = $LASTEXITCODE
+    Remove-Item $trust
+    if ($rc -ne 0) { throw "could not create IAM role $name" }
     $created = $true
   }
   foreach ($arn in $managed) { aws iam attach-role-policy @ip --role-name $name --policy-arn $arn }
@@ -171,7 +182,11 @@ function Set-SpendLimit([string]$InstanceId) {
   $name = 'DormVPN-Spend-Limit'
   $c = @('--profile', $s.aws_profile, '--region', 'us-east-1')
   $acct = (aws sts get-caller-identity --profile $s.aws_profile --query Account --output text).Trim()
-  $role = Initialize-Role 'dormvpn-budget' 'budgets.amazonaws.com' @('arn:aws:iam::aws:policy/AWSBudgetsActions_RolePolicyForResourceAdministrationWithSSM') $null
+  # only budgets in this account may use the role (AWS requires exactly this ARN form for Budgets)
+  $role = Initialize-Role 'dormvpn-budget' 'budgets.amazonaws.com' @('arn:aws:iam::aws:policy/AWSBudgetsActions_RolePolicyForResourceAdministrationWithSSM') $null -Condition @{
+    StringEquals = @{ 'aws:SourceAccount' = $acct }
+    ArnLike = @{ 'aws:SourceArn' = "arn:aws:budgets::${acct}:budget/*" }
+  }
   $budget = New-JsonArg ([ordered]@{
     BudgetName = $name; BudgetType = 'COST'; TimeUnit = 'MONTHLY'
     BudgetLimit = [ordered]@{ Amount = "$usd"; Unit = 'USD' }
