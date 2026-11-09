@@ -5,7 +5,7 @@
 #   installers\   the user installers you build from the app
 # Usage: .\build.ps1            build only
 #        .\build.ps1 -Install   also add DormVPN Admin shortcuts to the Desktop and Start menu
-param([switch]$Install)
+param([switch]$Install, [switch]$Package)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
@@ -50,6 +50,36 @@ Copy-Item "$root\server\*.ps1", "$root\server\*.py", "$root\server\*.sh", "$root
 Copy-Item "$obj\DormVPN.exe" "$out\client\"
 Copy-Item "$root\windows-app\install.cmd", "$root\windows-app\install.ps1", "$root\windows-app\uninstall.cmd", "$root\windows-app\uninstall.ps1" "$out\client\"
 "built: $out"
+
+# -Package: the zip for GitHub Releases. Unzip, run the admin app, deploy. sing-box is included (GPL-3.0, source: github.com/SagerNet/sing-box).
+if ($Package) {
+  $eng = Join-Path $root 'data\engine'
+  foreach ($f in 'sing-box.exe', 'libcronet.dll', 'LICENSE') { if (-not (Test-Path "$eng\$f")) { throw "Put the sing-box 1.14.4 files in data\engine first ($f is missing)." } }
+  $ver = [regex]::Match((Get-Content "$root\admin-app\DormVPNAdmin.cs" -Raw), 'AssemblyVersion\("(\d+\.\d+\.\d+)').Groups[1].Value
+  $stage = Join-Path $obj 'package'
+  if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+  $dir = Join-Path $stage 'DormVPN Admin'
+  Copy-Item $out $dir -Recurse
+  Copy-Item $eng (Join-Path $dir 'engine') -Recurse
+  [IO.File]::WriteAllText((Join-Path $dir 'READ ME.txt'), @"
+DormVPN Admin $ver
+
+1. Keep this folder somewhere permanent, e.g. Documents. Your keys and settings are saved in its data folder.
+   Don't delete it while your VPN is running on AWS: it's how you manage and remove it.
+2. Double-click "DormVPN Admin.exe". If Windows SmartScreen warns you, click More info, then Run anyway.
+3. Follow the setup: it installs the AWS CLI, connects your AWS account and creates your VPN.
+
+Source and docs: https://github.com/NotCodingRN/dormvpn
+sing-box (in the engine folder) is GPL-3.0 software, source: https://github.com/SagerNet/sing-box
+"@)
+  New-Item -ItemType Directory -Force (Join-Path $root 'dist') | Out-Null
+  $zip = Join-Path $root "dist\dormvpn-admin-v$ver.zip"
+  if (Test-Path $zip) { Remove-Item $zip }
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip)
+  Remove-Item $stage -Recurse -Force
+  "package: $zip ($([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB)"
+}
 
 if ($Install) {
   $sh = New-Object -ComObject WScript.Shell

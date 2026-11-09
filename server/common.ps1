@@ -26,8 +26,7 @@ function Save-State($st) { Save-Json $st "$script:data\state.json" }
 
 # sing-box.exe, which the setup wizard has you put in data\engine
 function Get-Engine {
-  $p = "$script:data\engine\sing-box.exe"
-  if (Test-Path $p) { return $p }
+  foreach ($p in "$script:data\engine\sing-box.exe", "$(Split-Path -Parent $script:scripts)\engine\sing-box.exe") { if (Test-Path $p) { return $p } }
   throw "sing-box.exe not found. Put it in $script:data\engine (the setup wizard explains how)."
 }
 

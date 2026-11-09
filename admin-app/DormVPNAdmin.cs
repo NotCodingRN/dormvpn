@@ -17,8 +17,8 @@ using DormVPN.Shared;
 
 [assembly: System.Reflection.AssemblyTitle("DormVPN Admin")]
 [assembly: System.Reflection.AssemblyProduct("DormVPN")]
-[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
 
 namespace DormVPN.Admin
 {
@@ -43,12 +43,14 @@ namespace DormVPN.Admin
     {
         public static readonly string App = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
         // everything stays inside the cloned folder: <folder>pp (this exe), <folder>\data, <folder>\installers
-        public static readonly string Root = Path.GetDirectoryName(App);
+        // a cloned repo has build.ps1 one level up: keep data in <repo>\data. A downloaded release keeps it next to the app.
+        public static readonly string Root = System.IO.File.Exists(Path.Combine(Path.GetDirectoryName(App), "build.ps1")) ? Path.GetDirectoryName(App) : App;
         public static readonly string Data = Path.Combine(Root, "data");
         public static string Installers { get { return Path.Combine(Root, "installers"); } }
         public static string Scripts { get { return Path.Combine(App, "scripts"); } }
         public static string Client { get { return Path.Combine(App, "client"); } }
-        public static string Engine { get { return Path.Combine(Data, "engine"); } }
+        // releases ship sing-box in <app>\engine, a clone keeps it in data\engine
+        public static string Engine { get { var bundled = Path.Combine(App, "engine"); return Directory.Exists(bundled) ? bundled : Path.Combine(Data, "engine"); } }
         public static string File(string name) { return Path.Combine(Data, name); }
     }
 
