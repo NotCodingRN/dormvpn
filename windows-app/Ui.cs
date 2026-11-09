@@ -15,21 +15,51 @@ namespace DormVPN.Shared
 {
     static class Theme
     {
-        public static readonly Color Bg = Color.FromArgb(244, 245, 247);
-        public static readonly Color Card = Color.White;
-        public static readonly Color Ink = Color.FromArgb(20, 23, 28);
-        public static readonly Color Muted = Color.FromArgb(93, 101, 115);
-        public static readonly Color Line = Color.FromArgb(226, 229, 234);
-        public static readonly Color Soft = Color.FromArgb(240, 242, 245);
-        public static readonly Color Accent = Color.FromArgb(31, 157, 85);
-        public static readonly Color AccentDark = Color.FromArgb(24, 128, 68);
-        public static readonly Color Warn = Color.FromArgb(194, 124, 14);
-        public static readonly Color Bad = Color.FromArgb(200, 56, 47);
-        public static readonly Color Grey = Color.FromArgb(138, 143, 152);
+        public static readonly Color Bg = Color.FromArgb(25, 22, 46);
+        public static readonly Color Card = Color.FromArgb(35, 31, 63);
+        public static readonly Color Field = Color.FromArgb(29, 26, 54);
+        public static readonly Color Ink = Color.FromArgb(244, 240, 255);
+        public static readonly Color Muted = Color.FromArgb(163, 155, 203);
+        public static readonly Color Line = Color.FromArgb(53, 47, 92);
+        public static readonly Color Soft = Color.FromArgb(44, 39, 80);
+        public static readonly Color Accent = Color.FromArgb(255, 182, 72);
+        public static readonly Color AccentHover = Color.FromArgb(255, 202, 128);
+        public static readonly Color AccentDark = Color.FromArgb(232, 156, 44);
+        public static readonly Color OnAccent = Color.FromArgb(42, 26, 0);
+        public static readonly Color Warn = Color.FromArgb(255, 143, 107);
+        public static readonly Color Bad = Color.FromArgb(255, 92, 122);
+        public static readonly Color Grey = Color.FromArgb(112, 104, 150);
+        public static readonly Color Busy = Color.FromArgb(156, 140, 255);
+        public static readonly Color GridLine = Color.FromArgb(25, 22, 46);
+        public const bool Grid = false, Gauge = false;
+        const string DisplayFamily = "Bahnschrift SemiBold";
 
         public static Font F(float size) { return new Font("Segoe UI", size, FontStyle.Regular, GraphicsUnit.Point); }
         public static Font B(float size) { return new Font("Segoe UI Semibold", size, FontStyle.Regular, GraphicsUnit.Point); }
         public static Font Mono(float size) { return new Font("Consolas", size, FontStyle.Regular, GraphicsUnit.Point); }
+        public static Font D(float size) { return new Font(DisplayFamily, size, FontStyle.Regular, GraphicsUnit.Point); }
+
+        /// The window background (and the blueprint grid in CloudLabs), lined up across controls.
+        public static void PaintBackdrop(Graphics g, Control c)
+        {
+            g.Clear(Bg);
+            if (!Grid) return;
+            var f = c.FindForm();
+            var o = f != null && c.IsHandleCreated ? f.PointToClient(c.PointToScreen(Point.Empty)) : Point.Empty;
+            const int step = 24;
+            using (var pen = new Pen(GridLine))
+            {
+                for (int x = -(((o.X % step) + step) % step); x < c.Width; x += step) g.DrawLine(pen, x, 0, x, c.Height);
+                for (int y = -(((o.Y % step) + step) % step); y < c.Height; y += step) g.DrawLine(pen, 0, y, c.Width, y);
+            }
+        }
+
+        /// What shows around a rounded control: the backdrop if its parent draws one, else the parent's colour.
+        public static void PaintUnder(Graphics g, Control c)
+        {
+            var p = c.Parent;
+            if (p != null && "grid".Equals(p.Tag)) PaintBackdrop(g, c); else g.Clear(p != null ? p.BackColor : Bg);
+        }
 
         public static GraphicsPath Round(RectangleF r, float radius)
         {
@@ -131,15 +161,15 @@ namespace DormVPN.Shared
             switch (Kind)
             {
                 case ButtonKind.Primary:
-                    fill = down ? Theme.AccentDark : hover ? Color.FromArgb(37, 172, 95) : Theme.Accent; border = fill; ink = Color.White; break;
+                    fill = down ? Theme.AccentDark : hover ? Theme.AccentHover : Theme.Accent; border = fill; ink = Theme.OnAccent; break;
                 case ButtonKind.Danger:
-                    fill = hover ? Color.FromArgb(253, 238, 237) : Theme.Card; border = Color.FromArgb(240, 200, 196); ink = Theme.Bad; break;
+                    fill = hover ? Color.FromArgb(58, 30, 30) : Theme.Card; border = Color.FromArgb(110, 50, 46); ink = Theme.Bad; break;
                 case ButtonKind.Link:
                     fill = Color.Transparent; border = Color.Transparent; ink = hover ? Theme.AccentDark : Theme.Accent; break;
                 default:
                     fill = down ? Theme.Line : hover ? Theme.Soft : Theme.Card; border = Theme.Line; ink = Theme.Ink; break;
             }
-            if (!Enabled) { ink = Color.FromArgb(150, ink); if (Kind == ButtonKind.Primary) { fill = Color.FromArgb(150, 205, 172); border = fill; } }
+            if (!Enabled) { ink = Color.FromArgb(150, ink); if (Kind == ButtonKind.Primary) { fill = Theme.Soft; border = Theme.Line; ink = Theme.Muted; } }
             if (Kind != ButtonKind.Link)
             {
                 using (var path = Theme.Round(r, 8))
@@ -156,22 +186,23 @@ namespace DormVPN.Shared
     /// White rounded card with a hairline border.
     class Card : Panel
     {
-        public Color Fill = Theme.Card;
+        Color fill = Theme.Card;
+        public Color Fill { get { return fill; } set { fill = value; BackColor = value; } }
         public Color Border = Theme.Line;
         public Card()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            BackColor = Theme.Bg;
+            BackColor = Theme.Card;
             Padding = new Padding(16);
         }
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent != null ? Parent.BackColor : Theme.Bg);
+            Theme.PaintUnder(g, this);
             using (var path = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), 12))
             {
-                using (var b = new SolidBrush(Fill)) g.FillPath(b, path);
+                using (var b = new SolidBrush(fill)) g.FillPath(b, path);
                 using (var p = new Pen(Border)) g.DrawPath(p, path);
             }
         }
@@ -191,9 +222,9 @@ namespace DormVPN.Shared
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent != null ? Parent.BackColor : Theme.Card);
+            Theme.PaintUnder(g, this);
             var r = new RectangleF(0, 0, Width - 1, Height - 1);
-            using (var path = Theme.Round(r, Height / 2f)) using (var b = new SolidBrush(Theme.Soft)) g.FillPath(b, path);
+            using (var path = Theme.Round(r, Height / 2f)) using (var b = new SolidBrush(Theme.Line)) g.FillPath(b, path);
             if (value > 0)
             {
                 var c = value >= 1 ? Theme.Bad : value >= 0.8 ? Theme.Warn : Theme.Accent;
@@ -210,8 +241,8 @@ namespace DormVPN.Shared
         public InputBox(bool password)
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            Height = 38; Padding = new Padding(10, 9, 10, 6); BackColor = Theme.Card;
-            Box.BorderStyle = BorderStyle.None; Box.Font = Theme.F(10.5f); Box.Dock = DockStyle.Fill; Box.BackColor = Theme.Card; Box.ForeColor = Theme.Ink;
+            Height = 38; Padding = new Padding(10, 9, 10, 6); BackColor = Theme.Field;
+            Box.BorderStyle = BorderStyle.None; Box.Font = Theme.F(10.5f); Box.Dock = DockStyle.Fill; Box.BackColor = Theme.Field; Box.ForeColor = Theme.Ink;
             Box.UseSystemPasswordChar = password;
             Box.GotFocus += delegate { Invalidate(); };
             Box.LostFocus += delegate { Invalidate(); };
@@ -223,10 +254,10 @@ namespace DormVPN.Shared
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent != null ? Parent.BackColor : Theme.Card);
+            Theme.PaintUnder(g, this);
             using (var path = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), 8))
             {
-                using (var b = new SolidBrush(Theme.Card)) g.FillPath(b, path);
+                using (var b = new SolidBrush(Theme.Field)) g.FillPath(b, path);
                 using (var p = new Pen(Box.Focused ? Theme.Accent : Theme.Line, Box.Focused ? 1.6f : 1f)) g.DrawPath(p, path);
             }
         }
@@ -234,6 +265,32 @@ namespace DormVPN.Shared
 
     static class Ui
     {
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+        static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+        /// Windows ignores colours on dropdown lists, so these are drawn by hand.
+        public static ComboBox DarkCombo(ComboBox c)
+        {
+            c.DrawMode = DrawMode.OwnerDrawFixed;
+            c.ItemHeight = 22;
+            c.BackColor = Theme.Field;
+            c.ForeColor = Theme.Ink;
+            c.DrawItem += (s, e) =>
+            {
+                var sel = (e.State & DrawItemState.Selected) != 0 && (e.State & DrawItemState.ComboBoxEdit) == 0;
+                using (var b = new SolidBrush(sel ? Theme.Soft : Theme.Field)) e.Graphics.FillRectangle(b, e.Bounds);
+                if (e.Index >= 0) TextRenderer.DrawText(e.Graphics, Convert.ToString(c.Items[e.Index]), c.Font, e.Bounds, c.Enabled ? Theme.Ink : Theme.Muted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            };
+            return c;
+        }
+
+        /// Dark title bar on Windows 10 2004+ and 11; older versions just ignore it.
+        public static void Dark(Form f)
+        {
+            f.ForeColor = Theme.Ink;
+            f.HandleCreated += delegate { int on = 1; try { DwmSetWindowAttribute(f.Handle, 20, ref on, 4); } catch { } };
+        }
+
         public static Label Text(string text, Font font, Color color)
         {
             return new Label { Text = text, Font = font, ForeColor = color, AutoSize = true, BackColor = Color.Transparent };

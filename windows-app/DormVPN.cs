@@ -14,15 +14,15 @@ using DormVPN.Shared;
 
 [assembly: System.Reflection.AssemblyTitle("DormVPN")]
 [assembly: System.Reflection.AssemblyProduct("DormVPN")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
 
 namespace DormVPN
 {
     static class Program
     {
         [STAThread]
-        static void Main(string[] args)
+        static void Main()
         {
             bool created;
             using (var m = new Mutex(true, "Global\\DormVPN-single-instance", out created))
@@ -36,8 +36,7 @@ namespace DormVPN
                 ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; // TLS 1.2
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                bool background = Array.Exists(args, a => a.Equals("/background", StringComparison.OrdinalIgnoreCase));
-                Application.Run(new ClientApp(background));
+                Application.Run(new ClientApp());
             }
         }
     }
@@ -53,6 +52,7 @@ namespace DormVPN
         string SettingsPath { get { return Path.Combine(dir, "settings.ini"); } }
         string SessionPath { get { return Path.Combine(dir, "session.dat"); } }
 
+        const string OtherVpn = "CloudLabs-VPN";
         public string ApiUrl = "";
         public string Token = "";
         public string UserName = "";
@@ -62,7 +62,7 @@ namespace DormVPN
 
         MainForm form;
         NotifyIcon tray;
-        ToolStripMenuItem miOpen, miToggle, miAutoConnect, miStartup;
+        ToolStripMenuItem miOpen, miToggle, miAutoConnect;
         System.Windows.Forms.Timer timer;
         Icon icoOff, icoWait, icoOn;
         bool hintedTray;
@@ -82,10 +82,10 @@ namespace DormVPN
         readonly object logLock = new object();
         static readonly Regex Ansi = new Regex("\x1B\\[[0-9;]*m", RegexOptions.Compiled);
 
-        public ClientApp(bool background)
+        public ClientApp()
         {
             icoOff = Theme.MakeIcon(Theme.Grey);
-            icoWait = Theme.MakeIcon(Color.FromArgb(240, 160, 32));
+            icoWait = Theme.MakeIcon(Theme.Busy);
             icoOn = Theme.MakeIcon(Theme.Accent);
 
             try { ApiUrl = Json.Str(Json.Parse(File.ReadAllText(Path.Combine(dir, "api.json"))), "api").TrimEnd('/'); } catch { }
@@ -96,11 +96,10 @@ namespace DormVPN
             miOpen = new ToolStripMenuItem("Open DormVPN", null, delegate { ShowWindow(); }) { Font = Theme.B(9) };
             miToggle = new ToolStripMenuItem("Connect", null, delegate { Toggle(); });
             miAutoConnect = new ToolStripMenuItem("Connect when DormVPN opens", null, delegate { miAutoConnect.Checked = !miAutoConnect.Checked; WriteSetting("autoconnect", miAutoConnect.Checked ? "1" : "0"); });
-            miStartup = new ToolStripMenuItem("Start DormVPN when I sign in", null, delegate { ToggleStartup(); });
-            menu.Items.AddRange(new ToolStripItem[] { miOpen, miToggle, new ToolStripSeparator(), miAutoConnect, miStartup,
+            menu.Items.AddRange(new ToolStripItem[] { miOpen, miToggle, new ToolStripSeparator(), miAutoConnect,
                 new ToolStripMenuItem("Open log", null, delegate { Ui.Open(LogPath); }), new ToolStripSeparator(),
                 new ToolStripMenuItem("Quit DormVPN", null, delegate { Quit(); }) });
-            menu.Opening += delegate { miStartup.Checked = StartupTaskExists(); miToggle.Enabled = Token != ""; };
+            menu.Opening += delegate { miToggle.Enabled = Token != ""; };
             miAutoConnect.Checked = ReadSetting("autoconnect", "1") == "1";
 
             tray = new NotifyIcon { Icon = icoOff, Text = "DormVPN", ContextMenuStrip = menu, Visible = true };
@@ -127,7 +126,7 @@ namespace DormVPN
             Log("[app] DormVPN started");
             if (Token != "") { RefreshMe(true); }
             Refresh();
-            if (!background || Token == "") ShowWindow();
+            ShowWindow();
         }
 
         public void ShowWindow()
@@ -277,6 +276,10 @@ namespace DormVPN
         {
             var why = CanConnect();
             if (why != null) { form.ShowError(why); return; }
+            // two VPNs fight over the same routes, so only one may be connected at a time
+            foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                if (nic.Name == OtherVpn && nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up)
+                { form.ShowError("Disconnect " + OtherVpn + " first. Only one VPN can be on at a time."); return; }
             if (!File.Exists(SingBox)) { form.ShowError("sing-box.exe is missing from " + dir + ". Reinstall DormVPN."); return; }
             if (!File.Exists(ConfigPath) && !WriteConfig()) { form.ShowError("Couldn't get your VPN settings yet. Check your internet and try again."); return; }
             WantConnected = true;
@@ -448,26 +451,6 @@ namespace DormVPN
 
         void WriteSetting(string key, string val) { try { File.WriteAllText(SettingsPath, key + "=" + val + Environment.NewLine); } catch { } }
 
-        bool StartupTaskExists() { return RunHidden("schtasks.exe", "/Query /TN DormVPN") == 0; }
-
-        void ToggleStartup()
-        {
-            if (StartupTaskExists()) RunHidden("schtasks.exe", "/Delete /TN DormVPN /F");
-            else RunHidden("schtasks.exe", "/Create /TN DormVPN /TR \"\\\"" + Application.ExecutablePath + "\\\" /background\" /SC ONLOGON /RL HIGHEST /F");
-        }
-
-        static int RunHidden(string file, string args)
-        {
-            try
-            {
-                var p = Process.Start(new ProcessStartInfo(file, args) { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true });
-                p.StandardOutput.ReadToEnd(); p.StandardError.ReadToEnd();
-                p.WaitForExit(10000);
-                return p.ExitCode;
-            }
-            catch { return -1; }
-        }
-
         void RotateLog()
         {
             lock (logLock)
@@ -513,14 +496,14 @@ namespace DormVPN
         public Color Tone = Theme.Grey;
         public bool Busy;
         float pulse;
-        readonly System.Windows.Forms.Timer anim = new System.Windows.Forms.Timer { Interval = 40 };
+        readonly System.Windows.Forms.Timer anim = new System.Windows.Forms.Timer { Interval = 33 };
         bool hover;
 
         public PowerButton()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Cursor = Cursors.Hand;
-            anim.Tick += delegate { pulse = (pulse + 0.035f) % 1f; Invalidate(); };
+            anim.Tick += delegate { pulse = (pulse + 0.02f) % 1f; Invalidate(); };
         }
         public void SetTone(Color c, bool busy)
         {
@@ -537,22 +520,42 @@ namespace DormVPN
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent.BackColor);
+            Theme.PaintUnder(g, this);
             float size = Math.Min(Width, Height) - 4;
             var c = new PointF(Width / 2f, Height / 2f);
-            // soft halo (pulses while connecting)
-            float halo = size / 2f * (Busy ? 0.86f + 0.14f * pulse : 1f);
-            int alpha = Busy ? (int)(70 * (1 - pulse)) + 20 : 38;
-            using (var b = new SolidBrush(Color.FromArgb(alpha, Tone))) g.FillEllipse(b, c.X - halo, c.Y - halo, halo * 2, halo * 2);
-            // disc
-            float r = size * 0.36f * (hover ? 1.03f : 1f);
-            using (var b = new SolidBrush(Tone)) g.FillEllipse(b, c.X - r, c.Y - r, r * 2, r * 2);
-            // power symbol
-            float pr = r * 0.42f;
-            using (var p = new Pen(Color.White, r * 0.11f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            bool off = !Busy && Tone == Theme.Grey;
+            float r = size * (Theme.Gauge ? 0.32f : 0.3f) * (hover ? 1.03f : 1f);
+            if (!off)
             {
-                g.DrawArc(p, c.X - pr, c.Y - pr, pr * 2, pr * 2, -60, 300);
-                g.DrawLine(p, c.X, c.Y - pr * 1.25f, c.X, c.Y - pr * 0.2f);
+                // the glow: steady when on, breathing while connecting
+                float halo = size / 2f * (Theme.Gauge ? 0.84f : 1f) * (Busy ? 0.82f + 0.18f * pulse : 1f);
+                using (var path = new GraphicsPath())
+                {
+                    path.AddEllipse(c.X - halo, c.Y - halo, halo * 2, halo * 2);
+                    using (var b = new PathGradientBrush(path) { CenterColor = Color.FromArgb(Busy ? (int)(110 * (1 - pulse)) + 40 : 150, Tone), SurroundColors = new[] { Color.FromArgb(0, Tone) } })
+                        g.FillPath(b, path);
+                }
+            }
+            if (Theme.Gauge)
+            {
+                // CloudLabs: a gauge ring of ticks, lit when on, sweeping while connecting
+                float r2 = size * 0.5f;
+                for (int i = 0; i < 60; i++)
+                {
+                    double ang = i * Math.PI / 30 - Math.PI / 2;
+                    bool lit = Busy ? ((i / 60f - pulse + 2f) % 1f) < 0.3f : !off;
+                    float r1 = r2 - (i % 5 == 0 ? size * 0.07f : size * 0.04f);
+                    using (var pen = new Pen(lit ? Tone : Theme.Line, i % 5 == 0 ? 2.2f : 1.3f))
+                        g.DrawLine(pen, c.X + (float)Math.Cos(ang) * r1, c.Y + (float)Math.Sin(ang) * r1, c.X + (float)Math.Cos(ang) * r2, c.Y + (float)Math.Sin(ang) * r2);
+                }
+            }
+            using (var b = new SolidBrush(off ? Theme.Card : Tone)) g.FillEllipse(b, c.X - r, c.Y - r, r * 2, r * 2);
+            if (off) using (var pen = new Pen(hover ? Theme.Muted : Theme.Line, 2f)) g.DrawEllipse(pen, c.X - r, c.Y - r, r * 2, r * 2);
+            float pr = r * 0.42f;
+            using (var pen = new Pen(off ? (hover ? Theme.Ink : Theme.Muted) : Theme.OnAccent, r * 0.1f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                g.DrawArc(pen, c.X - pr, c.Y - pr, pr * 2, pr * 2, -60, 300);
+                g.DrawLine(pen, c.X, c.Y - pr * 1.25f, c.X, c.Y - pr * 0.2f);
             }
         }
     }
@@ -589,8 +592,9 @@ namespace DormVPN
             BackColor = Theme.Bg;
             Font = Theme.F(9.5f);
             Icon = Theme.MakeIcon(Theme.Accent);
+            Ui.Dark(this);
 
-            foreach (var p in new[] { signIn, home }) { p.Dock = DockStyle.Fill; p.BackColor = Theme.Bg; Controls.Add(p); }
+            foreach (var p in new[] { signIn, home }) { var host = p; host.Dock = DockStyle.Fill; host.BackColor = Theme.Bg; host.Tag = "grid"; host.Paint += (s, e) => Theme.PaintBackdrop(e.Graphics, host); Controls.Add(host); }
             BuildSignIn();
             BuildHome();
             if (app.Token == "") ShowSignIn(null); else { signIn.Visible = false; home.Visible = true; }
@@ -599,27 +603,29 @@ namespace DormVPN
         void BuildSignIn()
         {
             int x = 40, w = 300;
-            var logo = new Panel { Bounds = new Rectangle(162, 64, 56, 56), BackColor = Theme.Bg };
-            logo.Paint += (s, e) => Theme.DrawShield(e.Graphics, new RectangleF(0, 0, 56, 56), Theme.Accent);
+            var logo = new Panel { Bounds = new Rectangle(162, 58, 56, 56) };
+            logo.Paint += (s, e) => { Theme.PaintUnder(e.Graphics, logo); Theme.DrawShield(e.Graphics, new RectangleF(0, 0, 56, 56), Theme.Accent); };
             signIn.Controls.Add(logo);
-            var title = Ui.Text("DormVPN", Theme.B(20), Theme.Ink);
+            var title = Ui.Text("DormVPN", Theme.D(24), Theme.Ink);
             var sub = Ui.Text("Sign in with the account you were given.", Theme.F(10), Theme.Muted);
             signIn.Controls.Add(title); signIn.Controls.Add(sub);
-            title.Location = new Point((380 - title.PreferredWidth) / 2, 128);
+            title.Location = new Point((380 - title.PreferredWidth) / 2, 122);
             sub.Location = new Point((380 - sub.PreferredWidth) / 2, 170);
 
             var lu = Ui.Text("Username", Theme.F(9.5f), Theme.Muted); lu.Location = new Point(x, 218);
             inUser = new InputBox(false) { Bounds = new Rectangle(x, 240, w, 38) };
             var lp = Ui.Text("Password", Theme.F(9.5f), Theme.Muted); lp.Location = new Point(x, 290);
             inPass = new InputBox(true) { Bounds = new Rectangle(x, 312, w, 38) };
+            var show = new FlatButton("Show", ButtonKind.Link) { Bounds = new Rectangle(x + w - 40, 287, 40, 22), Font = Theme.F(9), TabStop = false };
+            show.Click += delegate { inPass.Box.UseSystemPasswordChar = !inPass.Box.UseSystemPasswordChar; show.Text = inPass.Box.UseSystemPasswordChar ? "Show" : "Hide"; inPass.Box.Focus(); };
             lblSignInError = Ui.Wrapped("", Theme.F(9.5f), Theme.Bad, w); lblSignInError.Location = new Point(x, 358);
-            btnSignIn = new FlatButton("Sign in", ButtonKind.Primary) { Bounds = new Rectangle(x, 398, w, 40) };
+            btnSignIn = new FlatButton("Sign in", ButtonKind.Primary) { Bounds = new Rectangle(x, 398, w, 42) };
             btnSignIn.Click += delegate { DoSignIn(); };
             inPass.Box.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; DoSignIn(); } };
             inUser.Box.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; inPass.Box.Focus(); } };
             lblSignInNote = Ui.Wrapped("No account? Ask the person who runs this VPN to make one for you.", Theme.F(9), Theme.Muted, w);
-            lblSignInNote.Location = new Point(x, 540);
-            signIn.Controls.AddRange(new Control[] { lu, inUser, lp, inPass, lblSignInError, btnSignIn, lblSignInNote });
+            lblSignInNote.Location = new Point(x, 456);
+            signIn.Controls.AddRange(new Control[] { lu, inUser, lp, show, inPass, lblSignInError, btnSignIn, lblSignInNote });
         }
 
         void DoSignIn()
@@ -646,30 +652,31 @@ namespace DormVPN
 
         void BuildHome()
         {
-            lblUser = Ui.Text("", Theme.F(9.5f), Theme.Muted); lblUser.Location = new Point(24, 20);
-            btnSignOut = new FlatButton("Sign out", ButtonKind.Link) { Bounds = new Rectangle(296, 14, 64, 28) };
+            lblUser = Ui.Text("", Theme.F(9.5f), Theme.Muted); lblUser.Location = new Point(24, 22);
+            btnSignOut = new FlatButton("Sign out", ButtonKind.Link) { Bounds = new Rectangle(298, 16, 62, 28) };
             btnSignOut.Click += delegate
             {
                 if (MessageBox.Show(this, "Sign out of DormVPN? You'll be disconnected.", "DormVPN", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK)
                     app.SignOut(null);
             };
-            power = new PowerButton { Bounds = new Rectangle(100, 58, 180, 180) };
+            power = new PowerButton { Bounds = new Rectangle(80, 52, 220, 220) };
             power.Click += delegate { app.Toggle(); };
-            lblStatus = new Label { Font = Theme.B(17), ForeColor = Theme.Ink, TextAlign = ContentAlignment.MiddleCenter, Bounds = new Rectangle(20, 244, 340, 36), BackColor = Color.Transparent };
-            lblDetail = new Label { Font = Theme.F(9.5f), ForeColor = Theme.Muted, TextAlign = ContentAlignment.TopCenter, Bounds = new Rectangle(20, 282, 340, 40), BackColor = Color.Transparent };
+            lblStatus = new Label { Font = Theme.D(24), ForeColor = Theme.Ink, TextAlign = ContentAlignment.MiddleCenter, Bounds = new Rectangle(20, 278, 340, 42), BackColor = Color.Transparent };
+            lblDetail = new Label { Font = Theme.F(9.5f), ForeColor = Theme.Muted, TextAlign = ContentAlignment.TopCenter, Bounds = new Rectangle(20, 322, 340, 40), BackColor = Color.Transparent };
 
-            banner = new Card { Bounds = new Rectangle(20, 326, 340, 64), Visible = false };
+            banner = new Card { Bounds = new Rectangle(20, 368, 340, 60), Visible = false };
             lblBanner = Ui.Wrapped("", Theme.F(9.5f), Theme.Ink, 210); lblBanner.Location = new Point(14, 12);
-            btnBanner = new FlatButton("Start server", ButtonKind.Primary) { Bounds = new Rectangle(232, 14, 94, 34), Font = Theme.B(9) };
+            btnBanner = new FlatButton("Start server", ButtonKind.Primary) { Bounds = new Rectangle(232, 13, 94, 34), Font = Theme.B(9) };
             btnBanner.Click += delegate { app.Wake(); };
             banner.Controls.Add(lblBanner); banner.Controls.Add(btnBanner);
 
-            usageCard = new Card { Bounds = new Rectangle(20, 400, 340, 150) };
-            var lt = Ui.Text("Data used this month", Theme.F(9.5f), Theme.Muted); lt.Location = new Point(18, 16);
-            lblUsed = Ui.Text("–", Theme.B(22), Theme.Ink); lblUsed.Location = new Point(14, 40);
-            lblOf = Ui.Text("", Theme.F(11), Theme.Muted);
-            bar = new UsageBar { Bounds = new Rectangle(18, 94, 304, 8) };
-            lblUsageFoot = Ui.Text("", Theme.F(9), Theme.Muted); lblUsageFoot.Location = new Point(18, 112);
+            usageCard = new Card { Bounds = new Rectangle(20, 438, 340, 118) };
+            usageCard.Fill = Theme.Bg; usageCard.Border = Theme.Bg;
+            var lt = Ui.Text("Data this month", Theme.F(9), Theme.Muted); lt.Location = new Point(18, 14);
+            lblUsed = Ui.Text("–", Theme.D(26), Theme.Ink); lblUsed.Location = new Point(15, 32);
+            lblOf = Ui.Text("", Theme.F(10.5f), Theme.Muted);
+            bar = new UsageBar { Bounds = new Rectangle(18, 82, 304, 6) };
+            lblUsageFoot = Ui.Text("", Theme.F(9), Theme.Muted); lblUsageFoot.Location = new Point(18, 94);
             usageCard.Controls.AddRange(new Control[] { lt, lblUsed, lblOf, bar, lblUsageFoot });
 
             home.Controls.AddRange(new Control[] { lblUser, btnSignOut, power, lblStatus, lblDetail, banner, usageCard });
@@ -696,7 +703,7 @@ namespace DormVPN
                 case VpnState.Connected: tone = Theme.Accent; status = "Connected"; detail = "Your traffic goes through DormVPN.\n" + app.ExitInfo; break;
                 case VpnState.Connecting:
                 case VpnState.Reconnecting:
-                    tone = Color.FromArgb(240, 160, 32); busy = true;
+                    tone = Theme.Busy; busy = true;
                     status = app.State == VpnState.Connecting ? "Connecting…" : "Reconnecting…";
                     detail = server == "pending" ? "The server is starting up. This takes about a minute." :
                              server == "stopped" ? "The server is paused." : "Your traffic is held until the connection is back.";
@@ -711,8 +718,8 @@ namespace DormVPN
             lblDetail.Text = detail;
 
             // banner: paused server / used up / starting
-            string bannerText = null; bool bannerButton = false; Color bannerFill = Color.FromArgb(255, 247, 230), bannerBorder = Color.FromArgb(242, 220, 170);
-            if (app.Blocked) { bannerText = "You've used all your data for this month. It comes back on " + app.ResetText() + "."; bannerFill = Color.FromArgb(253, 238, 237); bannerBorder = Color.FromArgb(240, 200, 196); }
+            string bannerText = null; bool bannerButton = false; Color bannerFill = Theme.Card, bannerBorder = Theme.Warn;
+            if (app.Blocked) { bannerText = "You've used all your data for this month. It comes back on " + app.ResetText() + "."; bannerBorder = Theme.Bad; }
             else if (server == "stopped") { bannerText = Json.Bool(app.Me, "allow_wake") ? "The server is paused to save money." : "The server is paused. Ask the admin to start it."; bannerButton = Json.Bool(app.Me, "allow_wake"); }
             else if (server == "pending") bannerText = "The server is starting. You'll be connected in about a minute.";
             else if (server == "stopping") bannerText = "The server is being paused.";
@@ -733,12 +740,12 @@ namespace DormVPN
                 double used = Json.Num(app.Me, "used"), limit = Json.Num(app.Me, "limit_gb");
                 lblUsed.Text = Ui.Gb(used) + " GB";
                 lblOf.Text = limit > 0 ? "of " + limit.ToString("0.##") + " GB" : "no limit";
-                lblOf.Location = new Point(lblUsed.Right + 2, lblUsed.Top + 15);
+                lblOf.Location = new Point(lblUsed.Right + 2, lblUsed.Bottom - lblOf.PreferredHeight - 7);
                 bar.Visible = limit > 0;
                 bar.Value = limit > 0 ? used / (limit * 1e9) : 0;
                 string left = limit > 0 ? Math.Max(0, limit - used / 1e9).ToString("0.00") + " GB left  ·  " : "";
                 lblUsageFoot.Text = left + "resets " + app.ResetText();
-                lblUsageFoot.Top = limit > 0 ? 112 : 96;
+                lblUsageFoot.Top = limit > 0 ? 94 : 82;
             }
             else { lblUsed.Text = "–"; lblOf.Text = ""; lblUsageFoot.Text = app.Offline ? "Can't load your usage right now." : "Loading…"; bar.Visible = false; }
         }

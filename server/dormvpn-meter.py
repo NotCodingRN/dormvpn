@@ -100,7 +100,9 @@ def singbox_config(users):
     cfg["inbounds"][0]["users"] = [{"name": u["name"], "uuid": u["uuid"], "flow": "xtls-rprx-vision"} for u in active]
     cfg["outbounds"] = [{"type": "direct", "tag": "u-" + u["name"], "routing_mark": mark(u)} for u in active] + \
                        [{"type": "direct", "tag": "direct"}]
-    cfg["route"] = {"rules": [{"auth_user": [u["name"]], "outbound": "u-" + u["name"]} for u in active], "final": "direct"}
+    # resolve first, so a web address pointing at a private IP is caught too
+    guard = [{"action": "resolve"}, {"ip_is_private": True, "action": "reject"}]
+    cfg["route"] = {"rules": guard + [{"auth_user": [u["name"]], "outbound": "u-" + u["name"]} for u in active], "final": "direct"}
     return cfg
 
 

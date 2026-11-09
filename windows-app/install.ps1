@@ -22,9 +22,8 @@ foreach ($lnk in @("$([Environment]::GetFolderPath('Desktop'))\DormVPN.lnk", "$(
 }
 Write-Host "Shortcuts added to Desktop and Start menu"
 
-# start automatically at sign-in (no UAC prompt each time)
-schtasks.exe /Create /TN DormVPN /TR "`"$dst\DormVPN.exe`" /background" /SC ONLOGON /RL HIGHEST /F | Out-Null
-Write-Host "DormVPN will start when you sign in (turn off from its tray menu)"
+# older versions started at sign-in; remove that task if it's there
+cmd /c "schtasks /Delete /TN DormVPN /F >nul 2>&1"
 
 # launch
 Start-Process "$dst\DormVPN.exe"

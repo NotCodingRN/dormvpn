@@ -17,8 +17,8 @@ using DormVPN.Shared;
 
 [assembly: System.Reflection.AssemblyTitle("DormVPN Admin")]
 [assembly: System.Reflection.AssemblyProduct("DormVPN")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
 
 namespace DormVPN.Admin
 {
@@ -181,6 +181,7 @@ namespace DormVPN.Admin
             BackColor = Theme.Bg;
             Font = Theme.F(9.5f);
             Icon = Theme.MakeIcon(Theme.Accent);
+            Ui.Dark(this);
             sidebar.SetBounds(0, 0, Side, H); sidebar.BackColor = Theme.Card;
             sidebar.Paint += (s, e) => { using (var p = new Pen(Theme.Line)) e.Graphics.DrawLine(p, Side - 1, 0, Side - 1, H); };
             content.SetBounds(Side, 0, W - Side, H); content.BackColor = Theme.Bg;
@@ -207,7 +208,7 @@ namespace DormVPN.Admin
             page = new Panel { Bounds = new Rectangle(0, 0, W - Side, H), BackColor = Theme.Bg, AutoScroll = true };
             content.Controls.Add(page);
             y = 34;
-            Add(Ui.Text(title, Theme.B(17), Theme.Ink), 36);
+            Add(Ui.Text(title, Theme.D(21), Theme.Ink), 36);
             y += 6;
             if (subtitle != null) Para(subtitle, Theme.Muted);
             y += 8;
@@ -231,7 +232,7 @@ namespace DormVPN.Admin
 
         Label Step(int n, string text)
         {
-            var num = new Label { Text = n.ToString(), Font = Theme.B(9), ForeColor = Color.White, BackColor = Theme.Accent, TextAlign = ContentAlignment.MiddleCenter, Size = new Size(22, 22), Location = new Point(36, y) };
+            var num = new Label { Text = n.ToString(), Font = Theme.B(9), ForeColor = Theme.OnAccent, BackColor = Theme.Accent, TextAlign = ContentAlignment.MiddleCenter, Size = new Size(22, 22), Location = new Point(36, y) };
             page.Controls.Add(num);
             var l = Ui.Wrapped(text, Theme.F(10), Theme.Ink, W - Side - 72 - 36);
             l.Location = new Point(68, y + 1);
@@ -289,7 +290,7 @@ namespace DormVPN.Admin
             var logo = new Panel { Bounds = new Rectangle(24, 28, 30, 30), BackColor = Theme.Card };
             logo.Paint += (s, e) => Theme.DrawShield(e.Graphics, new RectangleF(0, 0, 30, 30), Theme.Accent);
             sidebar.Controls.Add(logo);
-            var t = Ui.Text("DormVPN Admin", Theme.B(12), Theme.Ink); t.Location = new Point(60, 31); sidebar.Controls.Add(t);
+            var t = Ui.Text("DormVPN Admin", Theme.D(13), Theme.Ink); t.Location = new Point(60, 31); sidebar.Controls.Add(t);
             if (!wizard) return;
             var sub = Ui.Text("Setup", Theme.F(9), Theme.Muted); sub.Location = new Point(26, 84); sidebar.Controls.Add(sub);
             for (int i = 0; i < steps.Length; i++)
@@ -303,7 +304,7 @@ namespace DormVPN.Admin
                     using (var b = new SolidBrush(idx <= step ? c : Theme.Card)) g.FillEllipse(b, 10, 8, 18, 18);
                     using (var p = new Pen(c, 1.4f)) g.DrawEllipse(p, 10, 8, 18, 18);
                     var mark = idx < step ? "✓" : (idx + 1).ToString();
-                    TextRenderer.DrawText(g, mark, Theme.B(8), new Rectangle(10, 8, 19, 18), idx <= step ? Color.White : Theme.Grey, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    TextRenderer.DrawText(g, mark, Theme.B(8), new Rectangle(10, 8, 19, 18), idx <= step ? Theme.Bg : Theme.Grey, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     TextRenderer.DrawText(g, steps[idx], idx == step ? Theme.B(10) : Theme.F(10), new Point(38, 7), idx > step ? Theme.Muted : Theme.Ink);
                 };
                 sidebar.Controls.Add(row);
@@ -391,7 +392,7 @@ namespace DormVPN.Admin
             var profiles = Aws.Run("configure list-profiles", 20000).Out.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()).ToList();
             var useExisting = new RadioButton { Text = "Use a profile already on this PC", Font = Theme.F(10), AutoSize = true, Enabled = profiles.Count > 0 };
             var addNew = new RadioButton { Text = "Add new keys", Font = Theme.F(10), AutoSize = true };
-            var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Font = Theme.F(10), Width = 220 };
+            var combo = Ui.DarkCombo(new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Font = Theme.F(10), Width = 220 });
             combo.Items.AddRange(profiles.Cast<object>().ToArray());
             Add(useExisting, 36); combo.Location = new Point(300, useExisting.Top - 3); page.Controls.Add(combo);
             Add(addNew, 36);
@@ -402,7 +403,7 @@ namespace DormVPN.Admin
             y += 4;
 
             var lr = Ui.Text("Region (where the server lives: pick one close to you)", Theme.F(9), Theme.Muted); Add(lr, 36);
-            var region = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Font = Theme.F(10), Width = 300, Location = new Point(36, y) };
+            var region = Ui.DarkCombo(new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Font = Theme.F(10), Width = 300, Location = new Point(36, y) });
             foreach (var r in Regions.All) region.Items.Add(Regions.Label(r[0]));
             page.Controls.Add(region);
             var fastest = new FlatButton("Find the fastest", ButtonKind.Secondary) { Bounds = new Rectangle(346, y - 2, 140, 32) };
@@ -527,7 +528,7 @@ namespace DormVPN.Admin
             y += 50;
             Step(2, "Open the zip and copy these three files: sing-box.exe, libcronet.dll and LICENSE.");
             Step(3, "Paste them into this folder:");
-            var box = Add(new TextBox { Text = Paths.Engine, ReadOnly = true, Font = Theme.Mono(9.5f), Width = W - Side - 68 - 36 - 120, BackColor = Theme.Card }, 68);
+            var box = Add(new TextBox { Text = Paths.Engine, ReadOnly = true, Font = Theme.Mono(9.5f), Width = W - Side - 68 - 36 - 120, BackColor = Theme.Field, ForeColor = Theme.Ink, BorderStyle = BorderStyle.FixedSingle }, 68);
             var open = new FlatButton("Open folder", ButtonKind.Secondary) { Bounds = new Rectangle(box.Right + 10, box.Top - 6, 110, 34) };
             open.Click += delegate { Ui.Open(Paths.Engine); };
             page.Controls.Add(open);
@@ -635,7 +636,7 @@ namespace DormVPN.Admin
             Func<string, string, bool, int, Control> row = (label, value, secretValue, rowY) =>
             {
                 var l = Ui.Text(label, Theme.F(9.5f), Theme.Muted); l.Location = new Point(18, rowY + 4); card.Controls.Add(l);
-                var v = new TextBox { Text = value, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Card, Font = label == "Link" ? Theme.F(9.5f) : Theme.Mono(10.5f),
+                var v = new TextBox { Text = value, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Theme.Card, ForeColor = Theme.Ink, Font = label == "Link" ? Theme.F(9.5f) : Theme.Mono(10.5f),
                                       Bounds = new Rectangle(100, rowY + 4, card.Width - 100 - 18 - 150, 22), UseSystemPasswordChar = secretValue };
                 card.Controls.Add(v);
                 var copy = new FlatButton("Copy", ButtonKind.Secondary) { Bounds = new Rectangle(card.Width - 18 - 70, rowY, 70, 30), Font = Theme.F(9) };
@@ -813,6 +814,7 @@ namespace DormVPN.Admin
         {
             var f = new Form { Text = "Delete DormVPN", ClientSize = new Size(440, 210), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
                                StartPosition = FormStartPosition.CenterParent, BackColor = Theme.Bg, Font = Theme.F(9.5f), AutoScaleMode = AutoScaleMode.Dpi };
+            Ui.Dark(f);
             var l = Ui.Wrapped("This deletes the VPN server, its address, the admin panel and every user from AWS. Nobody can connect afterwards and it can't be undone.\n\nType DELETE to confirm.", Theme.F(10), Theme.Ink, 400);
             l.Location = new Point(20, 18); f.Controls.Add(l);
             var box = new InputBox(false) { Bounds = new Rectangle(20, 112, 400, 38) }; f.Controls.Add(box);
@@ -830,7 +832,8 @@ namespace DormVPN.Admin
         {
             var f = new Form { Text = title, ClientSize = new Size(640, 420), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
                                StartPosition = FormStartPosition.CenterParent, BackColor = Theme.Bg, Font = Theme.F(9.5f), AutoScaleMode = AutoScaleMode.Dpi, ControlBox = false };
-            var box = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = Theme.Mono(9), BackColor = Theme.Card, Bounds = new Rectangle(16, 16, 608, 340), BorderStyle = BorderStyle.FixedSingle };
+            Ui.Dark(f);
+            var box = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = Theme.Mono(9), BackColor = Theme.Card, ForeColor = Theme.Ink, Bounds = new Rectangle(16, 16, 608, 340), BorderStyle = BorderStyle.FixedSingle };
             var close = new FlatButton("Working…", ButtonKind.Primary) { Bounds = new Rectangle(504, 368, 120, 38), Enabled = false };
             close.Click += delegate { f.Close(); };
             f.Controls.Add(box); f.Controls.Add(close);
