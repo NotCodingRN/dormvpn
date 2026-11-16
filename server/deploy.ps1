@@ -58,7 +58,8 @@ $apiRole = Initialize-Role 'dormvpn-api' 'lambda.amazonaws.com' @('arn:aws:iam::
     @{ Effect = 'Allow'; Action = @('dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem', 'dynamodb:Scan')
        Resource = "arn:aws:dynamodb:$($s.aws_region):${acct}:table/dormvpn" },
     @{ Effect = 'Allow'; Action = 'lightsail:GetInstanceState'; Resource = '*' },  # takes no resource ARN
-    @{ Effect = 'Allow'; Action = @('lightsail:StartInstance', 'lightsail:StopInstance'); Resource = "arn:aws:lightsail:${sr}:${acct}:Instance/*" }
+    @{ Effect = 'Allow'; Action = @('lightsail:StartInstance', 'lightsail:StopInstance'); Resource = "arn:aws:lightsail:${sr}:${acct}:Instance/*"
+       Condition = @{ StringEquals = @{ 'aws:ResourceTag/Name' = 'dormvpn-server' } } }  # never other Lightsail servers in the account
   )
 }
 Write-Host "ok"
