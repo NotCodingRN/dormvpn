@@ -1,9 +1,11 @@
 # Creates or updates the whole DormVPN setup in AWS. Safe to re-run.
-#   - VPN server: security group (TCP 443), Elastic IP (stable address), IPv6, t3.micro instance
-#   - API + admin panel: DynamoDB table, Lambda function with a public HTTPS URL
-#   - IAM roles for both, the admin login (first run), and keys (first run)
+#   - VPN server: a $5 Lightsail instance (1 TB of data a month included) with a static IP,
+#     IPv6 going out, and only TCP 443 open. It lives in the server region (Lightsail isn't in every region).
+#   - API + admin panel: DynamoDB table, Lambda function with a public HTTPS URL, in aws_region
+#   - the API's IAM role, the admin login (first run), and keys (first run)
 # The VPN instance is only replaced when its bootstrap changed (or with -ReplaceServer); the IP
 # stays the same either way, and users, limits and this month's usage live in DynamoDB.
+# An install from an older version that ran on EC2 moves to Lightsail and its EC2 server is deleted.
 param([switch]$ReplaceServer)
 $ErrorActionPreference = 'Continue'
 . "$PSScriptRoot\common.ps1"
@@ -16,7 +18,11 @@ function Step($t) { Write-Host "`n== $t" }
 $acct = (aws sts get-caller-identity --profile $s.aws_profile --query Account --output text)
 if ($LASTEXITCODE -ne 0 -or -not $acct) { throw "AWS credentials for profile '$($s.aws_profile)' don't work" }
 $acct = $acct.Trim()
-Write-Host "AWS account $acct, region $($s.aws_region)"
+$sr = Get-ServerRegion
+$sp = Get-ServerArgs
+aws lightsail get-regions @sp --query "regions[?name=='$sr'].name" --output text 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Lightsail isn't available in $sr for this account. Set server_region in secrets.json to a Lightsail region, e.g. eu-central-1." }
+Write-Host "AWS account $acct, panel in $($s.aws_region), VPN server in $sr"
 
 # ---------------------------------------------------------------- 1. keys
 Step "keys"
@@ -34,34 +40,25 @@ if (-not $s.token_key) { Set-Field $s 'token_key' (New-Token 32); Save-Secrets $
 if (-not $s.server_token) { Set-Field $s 'server_token' (New-Token 32); Save-Secrets $s }
 Write-Host "ok"
 
-# ---------------------------------------------------------------- 2. network
-Step "network"
-if (-not $state.sg) {
-  $vpc = aws ec2 describe-vpcs @p --filters Name=isDefault,Values=true --query "Vpcs[0].VpcId" --output text
-  $sg = aws ec2 create-security-group @p --group-name dormvpn-sg --description "DormVPN: TCP 443" --vpc-id $vpc `
-        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=dormvpn}]" --query GroupId --output text
-  aws ec2 authorize-security-group-ingress @p --group-id $sg --ip-permissions "IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=0.0.0.0/0,Description=DormVPN}]" | Out-Null
-  Set-StateField 'sg' $sg
+# ---------------------------------------------------------------- 2. address
+Step "address"
+aws lightsail get-static-ip @sp --static-ip-name dormvpn-ip 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  aws lightsail allocate-static-ip @sp --static-ip-name dormvpn-ip | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "could not get a static IP" }
 }
-if (-not $state.alloc) {
-  $eip = aws ec2 allocate-address @p --domain vpc --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=dormvpn}]" --output json | Out-String | ConvertFrom-Json
-  Set-StateField 'alloc' $eip.AllocationId
-  Set-StateField 'ip' $eip.PublicIp
-}
-Write-Host "security group $($state.sg), address $($state.ip)"
-Initialize-IPv6 $state.sg $(if ((Get-InstanceState) -in 'running', 'stopped') { $state.iid } else { '' })
+$newIp = "$(aws lightsail get-static-ip @sp --static-ip-name dormvpn-ip --query staticIp.ipAddress --output text)".Trim()
+Write-Host "address $newIp"
 
 # ---------------------------------------------------------------- 3. IAM roles
 Step "permissions"
-$null = Initialize-Role 'dormvpn-ssm' 'ec2.amazonaws.com' @('arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore') $null -InstanceProfile
 $apiRole = Initialize-Role 'dormvpn-api' 'lambda.amazonaws.com' @('arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole') @{
   Version = '2012-10-17'
   Statement = @(
     @{ Effect = 'Allow'; Action = @('dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem', 'dynamodb:Scan')
        Resource = "arn:aws:dynamodb:$($s.aws_region):${acct}:table/dormvpn" },
-    @{ Effect = 'Allow'; Action = 'ec2:DescribeInstances'; Resource = '*' },
-    @{ Effect = 'Allow'; Action = @('ec2:StartInstances', 'ec2:StopInstances'); Resource = "arn:aws:ec2:$($s.aws_region):${acct}:instance/*"
-       Condition = @{ StringEquals = @{ 'aws:ResourceTag/Name' = 'dormvpn-server' } } }
+    @{ Effect = 'Allow'; Action = 'lightsail:GetInstanceState'; Resource = '*' },  # takes no resource ARN
+    @{ Effect = 'Allow'; Action = @('lightsail:StartInstance', 'lightsail:StopInstance'); Resource = "arn:aws:lightsail:${sr}:${acct}:Instance/*" }
   )
 }
 Write-Host "ok"
@@ -175,58 +172,71 @@ $udFile = "$script:data\userdata.sh"
 $sha = [Security.Cryptography.SHA256]::Create()
 $udHash = -join ($sha.ComputeHash($script:utf8.GetBytes($ud)) | ForEach-Object { $_.ToString('x2') })
 
-$current = Get-InstanceState
+$old = $state.server
+$current = Get-ServerState $old
 $needNew = $ReplaceServer -or $current -in 'none', 'terminated', 'shutting-down' -or $state.userdata_hash -ne $udHash
 if (-not $needNew) {
-  Write-Host "server $($state.iid) is up to date ($current)"
+  Write-Host "server $old is up to date ($current)"
 } else {
-  $old = $state.iid
-  $ami = aws ssm get-parameter @p --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text
-  for ($i = 1; $i -le 6; $i++) {
-    $iid = aws ec2 run-instances @p --image-id $ami --instance-type t3.micro --security-group-ids $state.sg `
-      --iam-instance-profile "Name=dormvpn-ssm" --instance-initiated-shutdown-behavior stop `
-      --user-data (UriOf $udFile) --metadata-options "HttpTokens=required,HttpEndpoint=enabled" `
-      --credit-specification "CpuCredits=standard" `
-      --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=8,VolumeType=gp3,DeleteOnTermination=true}" `
-      --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=dormvpn-server}]" "ResourceType=volume,Tags=[{Key=Name,Value=dormvpn-server}]" `
-      --query "Instances[0].InstanceId" --output text
-    if ($iid -match '^i-') { break }
-    Start-Sleep 10
-  }
-  if ($iid -notmatch '^i-') { throw "run-instances failed" }
-  Write-Host "new instance $iid, waiting for it to start"
-  aws ec2 wait instance-running @p --instance-ids $iid
+  $name = 'dormvpn-server-' + $udHash.Substring(0, 8) + '-' + (Get-Random -Maximum 9999)
+  aws lightsail create-instances @sp --instance-names $name --availability-zone "${sr}a" --blueprint-id amazon_linux_2023 `
+    --bundle-id nano_3_0 --ip-address-type dualstack --user-data (UriOf $udFile) --tags key=Name,value=dormvpn-server | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "could not create the Lightsail server" }
+  Write-Host "new server $name, waiting for it to start"
+  $deadline = (Get-Date).AddMinutes(5)
+  while ((Get-ServerState $name) -ne 'running' -and (Get-Date) -lt $deadline) { Start-Sleep 5 }
+  if ((Get-ServerState $name) -ne 'running') { throw "server $name didn't start" }
+  # only the VPN port: this also closes the SSH and HTTP ports Lightsail opens by default
   for ($i = 1; $i -le 5; $i++) {
-    aws ec2 associate-address @p --allocation-id $state.alloc --instance-id $iid --allow-reassociation | Out-Null
+    aws lightsail put-instance-public-ports @sp --instance-name $name --port-infos "fromPort=443,toPort=443,protocol=tcp,cidrs=0.0.0.0/0" | Out-Null
     if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 5
   }
-  Set-StateField 'iid' $iid
+  if ($LASTEXITCODE -ne 0) { throw "could not set the server's firewall" }
+  $on = "$(aws lightsail get-static-ip @sp --static-ip-name dormvpn-ip --query staticIp.attachedTo --output text)".Trim()
+  if ($on -and $on -ne 'None') { aws lightsail detach-static-ip @sp --static-ip-name dormvpn-ip | Out-Null }
+  for ($i = 1; $i -le 5; $i++) {
+    aws lightsail attach-static-ip @sp --static-ip-name dormvpn-ip --instance-name $name | Out-Null
+    if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 5
+  }
+  if ($LASTEXITCODE -ne 0) { throw "could not attach the static IP" }
+  Set-StateField 'server' $name
+  Set-StateField 'ip' $newIp
   Set-StateField 'userdata_hash' $udHash
-  if ($old -and $old -ne $iid) {
-    for ($i = 1; $i -le 5; $i++) {
-      aws ec2 terminate-instances @p --instance-ids $old | Out-Null
-      if ($LASTEXITCODE -eq 0) { Write-Host "old instance $old terminating"; break }; Start-Sleep 5
-    }
+  if ($old -and $old -ne $name -and (Get-ServerState $old) -ne 'none') {
+    aws lightsail delete-instance @sp --instance-name $old | Out-Null
+    if ($LASTEXITCODE -eq 0) { Write-Host "old server $old deleted" }
   }
 }
 
-# ---------------------------------------------------------------- 9. tell the API about the server
-Invoke-ApiDirect @{ admin_action = 'set_server'; instance_id = $state.iid; ip = $state.ip; public_key = $s.reality_public_key
-                    short_id = $s.short_id; sni = $s.sni; region = $s.aws_region } | Out-Null
-
 if ($needNew) {
+  # sing-box starts listening once the server has set itself up and pulled the users from the API
   Step "waiting for the server to finish setting up (2-4 minutes)"
-  try {
-    Wait-ServerOnline $state.iid 420
-    $deadline = (Get-Date).AddMinutes(8)
-    do { Start-Sleep 10; $done = (Invoke-Server 'grep -c DORMVPN_SETUP_DONE /var/log/dormvpn-setup.log || true' -TimeoutSec 30).Trim() }
-    while ($done -ne '1' -and (Get-Date) -lt $deadline)
-    if ($done -eq '1') { Write-Host "server is ready" } else { Write-Host "the server hasn't finished yet; it keeps going on its own" }
-  } catch { Write-Host "couldn't check on the server: $($_.Exception.Message)" }
+  $deadline = (Get-Date).AddMinutes(8)
+  do {
+    Start-Sleep 10
+    $c = New-Object Net.Sockets.TcpClient
+    try { $up = $c.ConnectAsync($state.ip, 443).Wait(3000) -and $c.Connected } catch { $up = $false } finally { $c.Close() }
+  } while (-not $up -and (Get-Date) -lt $deadline)
+  if ($up) { Write-Host "server is ready" } else { Write-Host "the server hasn't answered yet; it keeps going on its own (run Update later to finish)" }
+}
+
+# ---------------------------------------------------------------- 9. tell the API about the server
+# (after it's ready: until then the apps keep using the old server)
+if (-not $needNew -or $up) {
+  Invoke-ApiDirect @{ admin_action = 'set_server'; instance_id = $state.server; ip = $state.ip; public_key = $s.reality_public_key
+                      short_id = $s.short_id; sni = $s.sni; region = $sr } | Out-Null
+}
+
+# an install from before the move to Lightsail: its EC2 server goes once the new one is in place
+if (($state.iid -or $state.alloc -or $state.sg) -and (-not $needNew -or $up)) {
+  Step "removing the old EC2 server"
+  Remove-Ec2Server
+  foreach ($k in 'iid', 'alloc', 'sg') { $state.PSObject.Properties.Remove($k) }
+  Save-State $state
 }
 
 # ---------------------------------------------------------------- 10. spending limit
 Step "spending limit"
-try { Set-SpendLimit $state.iid } catch { Write-Host "WARNING: the spending limit isn't set: $($_.Exception.Message)" }
+try { Set-SpendLimit } catch { Write-Host "WARNING: the spending limit isn't set: $($_.Exception.Message)" }
 
 Write-Host "`nDORMVPN_DEPLOYED $url"

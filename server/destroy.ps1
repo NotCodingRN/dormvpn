@@ -1,4 +1,4 @@
-# Deletes DormVPN from AWS: the VPN server, its address and firewall, the API/admin panel,
+# Deletes DormVPN from AWS: the VPN server and its address, the API/admin panel,
 # the user database, logs and IAM roles. Then it checks that nothing is left billing.
 # Run by the admin app with -Yes after it asked you; run by hand it asks first.
 # Your AWS account and access keys are not touched. Safe to run again if it stops partway.
@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Continue'
 $s = Get-Secrets
 $p = Get-AwsArgs
 $ip = @('--profile', $s.aws_profile)
+$sp = Get-ServerArgs
 $state = Get-State
 
 # The app's kill switch holds all traffic while the VPN is down, so deleting the server from a
@@ -32,24 +33,15 @@ function Retry([scriptblock]$cmd) {
   $false
 }
 
-# ---------- VPN server (found by tag too, in case state.json is out of date)
-$ids = aws ec2 describe-instances @p --filters Name=tag:Name,Values=dormvpn-server "Name=instance-state-name,Values=pending,running,stopping,stopped" --query "Reservations[].Instances[].InstanceId" --output text
-$ids = @("$ids" -split '\s+' | Where-Object { $_ })
-if ($ids.Count) {
-  Write-Host "deleting server $($ids -join ', ') (takes a minute or two)"
-  $null = Retry { aws ec2 terminate-instances @p --instance-ids $ids | Out-Null }
-  $null = Retry { aws ec2 wait instance-terminated @p --instance-ids $ids }
+# ---------- VPN server and its address (found by tag too, in case state.json is out of date)
+function Get-Servers { aws lightsail get-instances @sp --query "instances[?tags[?key=='Name' && value=='dormvpn-server']].name" --output text }
+foreach ($n in @("$(Get-Servers)" -split '\s+' | Where-Object { $_ })) {
+  if (Retry { aws lightsail delete-instance @sp --instance-name $n | Out-Null }) { Write-Host "server $n deleted" }
 }
-
-# ---------- address and firewall
-$allocs = aws ec2 describe-addresses @p --filters Name=tag:Name,Values=dormvpn --query "Addresses[].AllocationId" --output text
-foreach ($a in @("$allocs" -split '\s+' | Where-Object { $_ })) {
-  if (Retry { aws ec2 release-address @p --allocation-id $a }) { Write-Host "address released" }
-}
-$sgs = aws ec2 describe-security-groups @p --filters Name=group-name,Values=dormvpn-sg --query "SecurityGroups[].GroupId" --output text
-foreach ($g in @("$sgs" -split '\s+' | Where-Object { $_ })) {
-  if (Retry { aws ec2 delete-security-group @p --group-id $g | Out-Null }) { Write-Host "firewall deleted" }
-}
+aws lightsail get-static-ip @sp --static-ip-name dormvpn-ip 2>$null | Out-Null
+if ($LASTEXITCODE -eq 0) { if (Retry { aws lightsail release-static-ip @sp --static-ip-name dormvpn-ip | Out-Null }) { Write-Host "address released" } }
+# and the EC2 server of an install that never moved to Lightsail
+Remove-Ec2Server
 
 # ---------- API, database, logs
 aws lambda get-function @p --function-name dormvpn-api 2>$null | Out-Null
@@ -66,10 +58,6 @@ foreach ($a in @("$acts" -split '\s+' | Where-Object { $_ -and $_ -ne 'None' }))
 aws budgets delete-budget @c --account-id $acct --budget-name DormVPN-Spend-Limit 2>$null
 
 # ---------- IAM roles (free, but no reason to leave them behind)
-aws iam remove-role-from-instance-profile @ip --instance-profile-name dormvpn-ssm --role-name dormvpn-ssm 2>$null
-aws iam delete-instance-profile @ip --instance-profile-name dormvpn-ssm 2>$null
-aws iam detach-role-policy @ip --role-name dormvpn-ssm --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore 2>$null
-aws iam delete-role @ip --role-name dormvpn-ssm 2>$null
 aws iam detach-role-policy @ip --role-name dormvpn-api --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole 2>$null
 aws iam delete-role-policy @ip --role-name dormvpn-api --policy-name dormvpn-api-policy 2>$null
 aws iam delete-role @ip --role-name dormvpn-api 2>$null
@@ -79,13 +67,14 @@ aws iam delete-role @ip --role-name dormvpn-budget 2>$null
 # ---------- check, and only then forget this install
 Write-Host "`nchecking that nothing is left..."
 $left = @()
-$v = aws ec2 describe-instances @p --filters Name=tag:Name,Values=dormvpn-server "Name=instance-state-name,Values=pending,running,stopping,stopped" --query "Reservations[].Instances[].InstanceId" --output text
+$v = Get-Servers
 if ($LASTEXITCODE -ne 0) { $left += 'server (could not check)' } elseif ("$v".Trim()) { $left += "server $v" }
-$v = aws ec2 describe-addresses @p --filters Name=tag:Name,Values=dormvpn --query "Addresses[].PublicIp" --output text
-if ($LASTEXITCODE -ne 0) { $left += 'address (could not check)' } elseif ("$v".Trim()) { $left += "address $v" }
-$v = aws ec2 describe-security-groups @p --filters Name=group-name,Values=dormvpn-sg --query "SecurityGroups[].GroupId" --output text
-if ($LASTEXITCODE -ne 0) { $left += 'firewall (could not check)' } elseif ("$v".Trim()) { $left += "firewall $v" }
+aws lightsail get-static-ip @sp --static-ip-name dormvpn-ip 2>$null | Out-Null
+if ($LASTEXITCODE -eq 0) { $left += 'address' }
+$v = aws ec2 describe-instances @p --filters Name=tag:Name,Values=dormvpn-server "Name=instance-state-name,Values=pending,running,stopping,stopped" --query "Reservations[].Instances[].InstanceId" --output text
+if ("$v".Trim()) { $left += "old EC2 server $v" }
 aws lambda get-function @p --function-name dormvpn-api 2>$null | Out-Null
+if ($LASTEXITCODE -eq 0) { $left += 'admin panel' }aws lambda get-function @p --function-name dormvpn-api 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) { $left += 'admin panel' }
 $v = aws dynamodb list-tables @p --query "TableNames[?@=='dormvpn']" --output text
 if ("$v".Trim()) {

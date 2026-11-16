@@ -28,7 +28,6 @@ from decimal import Decimal
 import boto3
 
 TABLE = boto3.resource("dynamodb").Table(os.environ.get("TABLE", "dormvpn"))
-EC2 = boto3.client("ec2")
 TOKEN_KEY = os.environ.get("TOKEN_KEY", "").encode()
 SERVER_TOKEN = os.environ.get("SERVER_TOKEN", "")
 GB = 10 ** 9
@@ -144,7 +143,7 @@ def update(pk, sets, adds=None, remove=None):
 
 def settings():
     s = plain(TABLE.get_item(Key={"pk": "settings"}).get("Item", {}))
-    s.setdefault("monthly_cap_gb", 90)  # stays inside the free 100 GB of data out
+    s.setdefault("monthly_cap_gb", 450)  # Lightsail's $5 plan includes 1 TB, counted both ways, and a VPN moves each byte twice
     s.setdefault("idle_stop_minutes", 0)
     s.setdefault("allow_wake", True)
     return s
@@ -168,13 +167,17 @@ def usage(month=None):
     return plain(TABLE.get_item(Key={"pk": "usage#" + (month or month_now())}).get("Item", {}))
 
 
+def lightsail(s):
+    """The VPN server is a Lightsail instance, in its own region (Lightsail isn't in every region)."""
+    return boto3.client("lightsail", region_name=s.get("region") or None)
+
+
 def server_state(s):
-    iid = s.get("instance_id")
-    if not iid:
+    name = s.get("instance_id")
+    if not name:
         return "none"
     try:
-        r = EC2.describe_instances(InstanceIds=[iid])
-        return r["Reservations"][0]["Instances"][0]["State"]["Name"]
+        return lightsail(s).get_instance_state(instanceName=name)["state"]["name"]
     except Exception:
         return "unknown"
 
@@ -351,13 +354,13 @@ def admin_settings(body):
 
 def admin_server(body):
     s = settings()
-    iid, action = s.get("instance_id"), body.get("action")
-    if not iid:
+    name, action = s.get("instance_id"), body.get("action")
+    if not name:
         raise HttpError(400, "No server deployed yet.")
     if action == "start":
-        EC2.start_instances(InstanceIds=[iid])
+        lightsail(s).start_instance(instanceName=name)
     elif action == "stop":
-        EC2.stop_instances(InstanceIds=[iid])
+        lightsail(s).stop_instance(instanceName=name)
     else:
         raise HttpError(400, "action must be start or stop")
     return {"state": server_state(s)}
@@ -400,7 +403,7 @@ def user_wake(u):
         raise HttpError(403, "You've used your data for this month.")
     st = server_state(s)
     if st == "stopped":
-        EC2.start_instances(InstanceIds=[s["instance_id"]])
+        lightsail(s).start_instance(instanceName=s["instance_id"])
         st = "pending"
     return {"state": st}
 

@@ -106,7 +106,7 @@ dialog h3 { margin: 0 0 12px; font-size: 17px; }
       <div class="grid">
         <div class="stat"><div class="k">Address</div><div class="v" id="srvIp" style="font-size:17px">–</div></div>
         <div class="stat"><div class="k">Used this month</div><div class="v" id="totUsed">–</div><div class="small muted" id="totCap"></div></div>
-        <div class="stat"><div class="k">Estimated data cost</div><div class="v" id="totCost">–</div><div class="small muted">first 100 GB/month free</div></div>
+        <div class="stat"><div class="k">Estimated data cost</div><div class="v" id="totCost">–</div><div class="small muted">1 TB/month included (about 450 GB of use)</div></div>
         <div class="stat"><div class="k">Resets</div><div class="v" id="resets" style="font-size:17px">–</div><div class="small muted" id="lastReport"></div></div>
       </div>
     </div>
@@ -129,7 +129,7 @@ dialog h3 { margin: 0 0 12px; font-size: 17px; }
         <div style="flex:1.3"><label class="toggle"><input id="sWake" type="checkbox"> Users can start a paused server from the app</label></div>
         <div style="flex:0"><button class="primary" type="submit">Save</button></div>
       </form>
-      <p class="muted small" style="margin:10px 0 0">When the cap is reached everyone is cut off until the 1st. A paused server costs about $0.15/day instead of $0.43/day.</p>
+      <p class="muted small" style="margin:10px 0 0">When the cap is reached everyone is cut off until the 1st. The server is a flat $5 a month, paused or not.</p>
       <p class="muted small" id="history" style="margin:6px 0 0"></p>
     </div>
   </section>
@@ -231,7 +231,7 @@ function render() {
   const total = s.users.reduce((a, u) => a + u.used, 0);
   $("totUsed").textContent = gb(total) + " GB";
   $("totCap").textContent = s.settings.monthly_cap_gb ? "of " + s.settings.monthly_cap_gb + " GB cap" : "no cap set";
-  $("totCost").textContent = "$" + (Math.max(0, total / 1e9 - 100) * 0.09).toFixed(2);
+  $("totCost").textContent = "$" + (Math.max(0, 2 * total / 1e9 - 1000) * 0.09).toFixed(2);
   $("resets").textContent = new Date(s.resets + "T00:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
   $("lastReport").textContent = srv.last_report ? "server reported " + ago(srv.last_report) : "";
   const shown = s.users.filter(u => !q || u.name.includes(q));

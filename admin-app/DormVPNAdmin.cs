@@ -17,8 +17,8 @@ using DormVPN.Shared;
 
 [assembly: System.Reflection.AssemblyTitle("DormVPN Admin")]
 [assembly: System.Reflection.AssemblyProduct("DormVPN")]
-[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
 
 namespace DormVPN.Admin
 {
@@ -148,18 +148,25 @@ namespace DormVPN.Admin
         public static string Profile { get { return Json.Str(Read("secrets.json"), "aws_profile"); } }
         public static string Region { get { return Json.Str(Read("secrets.json"), "aws_region"); } }
         public static string AwsArgs { get { return " --profile " + Aws.Q(Profile) + " --region " + Aws.Q(Region); } }
+        // the VPN server (Lightsail) can sit in another region than the panel; older installs have none set
+        public static string ServerRegion { get { var r = Json.Str(Read("secrets.json"), "server_region"); return r != "" ? r : Region; } }
+        public static string ServerArgs { get { return " --profile " + Aws.Q(Profile) + " --region " + Aws.Q(ServerRegion); } }
+        public static string Server { get { return Json.Str(Read("state.json"), "server"); } }
+        public static bool HasServer { get { var st = Read("state.json"); return Json.Str(st, "server") != "" || Json.Str(st, "iid") != ""; } }
     }
 
     static class Regions
     {
+        // regions with Lightsail, where the server runs
         public static readonly string[][] All = {
-            new[] { "eu-west-3", "Europe (Paris)" }, new[] { "eu-west-1", "Europe (Ireland)" }, new[] { "eu-west-2", "Europe (London)" },
-            new[] { "eu-central-1", "Europe (Frankfurt)" }, new[] { "eu-north-1", "Europe (Stockholm)" }, new[] { "eu-south-1", "Europe (Milan)" },
-            new[] { "me-central-1", "Middle East (UAE)" }, new[] { "me-south-1", "Middle East (Bahrain)" }, new[] { "il-central-1", "Israel (Tel Aviv)" },
+            new[] { "eu-central-1", "Europe (Frankfurt)" }, new[] { "eu-west-3", "Europe (Paris)" }, new[] { "eu-west-1", "Europe (Ireland)" },
+            new[] { "eu-west-2", "Europe (London)" }, new[] { "eu-north-1", "Europe (Stockholm)" }, new[] { "eu-south-2", "Europe (Spain)" },
             new[] { "ap-south-1", "Asia Pacific (Mumbai)" }, new[] { "ap-southeast-1", "Asia Pacific (Singapore)" }, new[] { "ap-northeast-1", "Asia Pacific (Tokyo)" },
-            new[] { "us-east-1", "US East (N. Virginia)" }, new[] { "us-west-2", "US West (Oregon)" }, new[] { "ca-central-1", "Canada (Central)" },
-            new[] { "sa-east-1", "South America (Sao Paulo)" }, new[] { "af-south-1", "Africa (Cape Town)" } };
-        public static string Label(string code) { var r = All.FirstOrDefault(x => x[0] == code); return r == null ? code : r[1] + "  ·  " + code; }
+            new[] { "ap-northeast-2", "Asia Pacific (Seoul)" }, new[] { "ap-southeast-2", "Asia Pacific (Sydney)" },
+            new[] { "us-east-1", "US East (N. Virginia)" }, new[] { "us-east-2", "US East (Ohio)" }, new[] { "us-west-2", "US West (Oregon)" },
+            new[] { "ca-central-1", "Canada (Central)" }, new[] { "sa-east-1", "South America (Sao Paulo)" } };
+        static readonly string[][] Older = { new[] { "eu-south-1", "Europe (Milan)" } };  // panels made by older versions
+        public static string Label(string code) { var r = All.Concat(Older).FirstOrDefault(x => x[0] == code); return r == null ? code : r[1] + "  ·  " + code; }
     }
 
     class AdminForm : Form
@@ -333,14 +340,14 @@ namespace DormVPN.Admin
             NewPage("Set up your own VPN", "This sets up DormVPN in your Amazon Web Services (AWS) account, in about 10 minutes.");
             Para("What you'll get:", Theme.Ink, 10.5f);
             Step(1, "A private VPN server on AWS. Its traffic looks like normal HTTPS, so it works on strict networks.");
-            Step(2, "A web admin panel (with its own admin login) to add users, set how much data each one may use per month, and pause the server.");
+            Step(2, "A web admin panel (with its own admin login) to add users and set how much data each one may use per month.");
             Step(3, "An installer you send to your users. They sign in with the username and password you give them.");
             y += 6;
             var card = new Card { Bounds = new Rectangle(36, y, W - Side - 72, 112) };
             var ct = Ui.Text("What it costs (AWS prices)", Theme.B(10), Theme.Ink); ct.Location = new Point(16, 14); card.Controls.Add(ct);
-            var cb = Ui.Wrapped("About $13/month if the server runs all the time, about $4.40/month while it's paused. " +
-                "The first 100 GB of data per month are free, then about $0.09 per GB. The admin panel and user database cost cents. " +
-                "Per-user limits and a monthly cap keep data costs in check.", Theme.F(9.5f), Theme.Muted, W - Side - 72 - 32);
+            var cb = Ui.Wrapped("$5/month for the server (an AWS Lightsail plan), with 1 TB of data a month included. " +
+                "That's about 450 GB of VPN use, because a VPN moves every byte twice. The admin panel and user database cost cents. " +
+                "Per-user limits and a monthly cap keep you inside the 1 TB.", Theme.F(9.5f), Theme.Muted, W - Side - 72 - 32);
             cb.Location = new Point(16, 40); card.Controls.Add(cb);
             page.Controls.Add(card);
             Footer("Get started", delegate { ShowStep(1); });
@@ -414,13 +421,13 @@ namespace DormVPN.Admin
             Label result = null;  // the footer status line, created by Footer()
 
             // defaults
-            string curProfile = Store.Profile, curRegion = Store.Region;
+            string curProfile = Store.Profile, curRegion = Store.ServerRegion;
             if (curProfile != "" && profiles.Contains(curProfile)) { useExisting.Checked = true; combo.SelectedItem = curProfile; }
             else if (profiles.Count > 0) { useExisting.Checked = true; combo.SelectedIndex = 0; }
             else addNew.Checked = true;
-            int ri = Array.FindIndex(Regions.All, r => r[0] == (curRegion != "" ? curRegion : "eu-west-3"));
+            int ri = Array.FindIndex(Regions.All, r => r[0] == (curRegion != "" ? curRegion : "eu-central-1"));
             region.SelectedIndex = Math.Max(0, ri);
-            bool deployed = Json.Str(Store.Read("state.json"), "iid") != "";
+            bool deployed = Store.HasServer;
             if (deployed) { region.Enabled = false; fastest.Enabled = false; lr.Text = "Region (your server is already in this one)"; }
 
             Action sync = delegate { combo.Enabled = useExisting.Checked; keyId.Enabled = secret.Enabled = addNew.Checked; };
@@ -434,7 +441,7 @@ namespace DormVPN.Admin
                 ThreadPool.QueueUserWorkItem(delegate
                 {
                     var times = new Dictionary<string, long>();
-                    var threads = Regions.All.Select(r => new Thread(() => { var t = Ping("ec2." + r[0] + ".amazonaws.com"); lock (times) times[r[0]] = t; })).ToList();
+                    var threads = Regions.All.Select(r => new Thread(() => { var t = Ping("lightsail." + r[0] + ".amazonaws.com"); lock (times) times[r[0]] = t; })).ToList();
                     threads.ForEach(t => t.Start()); threads.ForEach(t => t.Join());
                     var best = times.Where(kv => kv.Value > 0).OrderBy(kv => kv.Value).FirstOrDefault();
                     OnUi(delegate
@@ -478,7 +485,7 @@ namespace DormVPN.Admin
                     }
                     if (msg == null)
                     {
-                        var r = Aws.Run("ec2 describe-availability-zones --output text --query AvailabilityZones[0].ZoneName --profile " + Aws.Q(profile) + " --region " + reg, 30000);
+                        var r = Aws.Run("lightsail get-bundles --output text --query bundles[0].bundleId --profile " + Aws.Q(profile) + " --region " + reg, 30000);
                         if (r.Code != 0) msg = "Your account can't use " + Regions.Label(reg) + " (it may need to be turned on under Account → AWS Regions). Pick another region.";
                     }
                     OnUi(delegate
@@ -486,7 +493,8 @@ namespace DormVPN.Admin
                         footerNext.Enabled = true;
                         if (msg != null) { result.ForeColor = Theme.Bad; result.Text = msg; return; }
                         var s = Store.Read("secrets.json");
-                        s["aws_profile"] = profile; s["aws_region"] = reg;
+                        s["aws_profile"] = profile;
+                        if (!deployed) s["aws_region"] = reg;  // the panel never moves once it exists
                         Store.Write("secrets.json", s);
                         result.ForeColor = Theme.Accent; result.Text = "✓  Connected as " + who;
                         ShowStep(3);
@@ -565,18 +573,18 @@ namespace DormVPN.Admin
 
         void PageCreate()
         {
-            bool update = Json.Str(Store.Read("state.json"), "iid") != "";
+            bool update = Store.HasServer;
             NewPage(update ? "Update your VPN" : "Create your VPN",
-                "DormVPN Admin now creates the server, the admin panel and the user database in " + Regions.Label(Store.Region) +
+                "DormVPN Admin now creates the server, the admin panel and the user database in " + Regions.Label(Store.ServerRegion) +
                 " (AWS profile " + Store.Profile + "). This takes 5–10 minutes. You can watch below.");
-            // spending limit: a monthly AWS budget that emails you and stops the server at 100%
+            // spending limit: a monthly AWS budget that emails you
             var secrets = Store.Read("secrets.json");
             var lu = Ui.Text("Monthly spending limit (US$)", Theme.F(9), Theme.Muted); Add(lu, 36);
             var usd = Add(new InputBox(false) { Width = 170 }, 36);
             usd.Text = Json.Num(secrets, "budget_usd") > 0 ? Json.Num(secrets, "budget_usd").ToString() : "15";
             var le = Ui.Text("Email for cost alerts", Theme.F(9), Theme.Muted); le.Location = new Point(222, lu.Top); page.Controls.Add(le);
             var mail = new InputBox(false) { Width = W - Side - 222 - 36, Location = new Point(222, usd.Top) }; mail.Text = Json.Str(secrets, "budget_email"); page.Controls.Add(mail);
-            Para("At the limit the server stops itself. Normal running costs about $13 a month, plus data over 100 GB. Credits don't count towards it, so it works while you're still on credits.", Theme.Muted, 9f);
+            Para("You get an email at 80% and at 100%. Normal running costs $5 a month. Credits don't count towards it, so it works while you're still on credits.", Theme.Muted, 9f);
             log = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = Theme.Mono(9), BackColor = Theme.Card, ForeColor = Theme.Ink,
                                 Bounds = new Rectangle(36, y + 4, W - Side - 72, H - y - 104), BorderStyle = BorderStyle.FixedSingle };
             page.Controls.Add(log);
@@ -622,7 +630,7 @@ namespace DormVPN.Admin
 
         void PageDone()
         {
-            NewPage("Your VPN is ready", "Manage users in the admin panel: add people, set their monthly limits, pause the server.");
+            NewPage("Your VPN is ready", "Manage users in the admin panel: add people and set their monthly limits.");
             PanelCard();
             AppCard();
             Footer("Finish", delegate { wizard = false; ShowDashboard(); }, false);
@@ -718,7 +726,7 @@ namespace DormVPN.Admin
             DrawSidebar();
             var nav = new[] {
                 new KeyValuePair<string, Action>("Open admin panel", () => Ui.Open(Store.PanelUrl)),
-                new KeyValuePair<string, Action>("AWS console", () => Ui.Open("https://" + Store.Region + ".console.aws.amazon.com/ec2/home?region=" + Store.Region + "#Instances:")),
+                new KeyValuePair<string, Action>("AWS console", () => Ui.Open("https://lightsail.aws.amazon.com/ls/webapp/home/instances")),
                 new KeyValuePair<string, Action>("Change AWS keys", () => { wizard = true; ShowStep(2); }),
             };
             int ny = 92;
@@ -729,7 +737,7 @@ namespace DormVPN.Admin
                 b.Click += delegate { a(); };
                 sidebar.Controls.Add(b); ny += 32;
             }
-            var acct = Ui.Wrapped("AWS profile " + Store.Profile + "\n" + Regions.Label(Store.Region), Theme.F(8.5f), Theme.Muted, Side - 40);
+            var acct = Ui.Wrapped("AWS profile " + Store.Profile + "\n" + Regions.Label(Store.ServerRegion), Theme.F(8.5f), Theme.Muted, Side - 40);
             acct.Location = new Point(24, H - 60); sidebar.Controls.Add(acct);
 
             NewPage("Dashboard", null);
@@ -776,10 +784,10 @@ namespace DormVPN.Admin
 
         void LoadServer()
         {
-            var iid = Json.Str(Store.Read("state.json"), "iid");
+            var name = Store.Server;
             ThreadPool.QueueUserWorkItem(delegate
             {
-                var r = Aws.Run("ec2 describe-instances --instance-ids " + iid + " --query Reservations[0].Instances[0].State.Name --output text" + Store.AwsArgs, 30000);
+                var r = Aws.Run("lightsail get-instance-state --instance-name " + Aws.Q(name) + " --query state.name --output text" + Store.ServerArgs, 30000);
                 var st = r.Code == 0 ? r.Out.Trim() : "unknown";
                 OnUi(delegate
                 {
@@ -798,12 +806,12 @@ namespace DormVPN.Admin
 
         void Power(string action)
         {
-            var iid = Json.Str(Store.Read("state.json"), "iid");
+            var name = Store.Server;
             srvStart.Visible = srvPause.Visible = false;
             srvState.Text = action == "start" ? "● Starting…" : "● Pausing…"; srvState.ForeColor = Theme.Warn;
             ThreadPool.QueueUserWorkItem(delegate
             {
-                var r = Aws.Run("ec2 " + (action == "start" ? "start" : "stop") + "-instances --instance-ids " + iid + Store.AwsArgs, 30000);
+                var r = Aws.Run("lightsail " + (action == "start" ? "start" : "stop") + "-instance --instance-name " + Aws.Q(name) + Store.ServerArgs, 30000);
                 OnUi(delegate
                 {
                     if (r.Code != 0) MessageBox.Show(this, "AWS said: " + FirstLine(r.Err), "DormVPN Admin", MessageBoxButtons.OK, MessageBoxIcon.Warning);

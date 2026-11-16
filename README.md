@@ -7,7 +7,7 @@ It comes as two Windows apps:
 - **DormVPN Admin** (for you): a setup wizard that builds everything in AWS, then a dashboard with the link and login for your web admin panel.
 - **DormVPN** (for your users): they sign in with the username and password you made for them, see how much data they've used against their limit, and connect. There's no sign-up.
 
-In the **web admin panel** you add and remove users, set each user's monthly data limit, set a cap for everyone together, see usage, and pause or start the server.
+In the **web admin panel** you add and remove users, set each user's monthly data limit, set a cap for everyone together, and see usage.
 
 ## Download
 
@@ -54,34 +54,34 @@ Phones: in the panel, click **Phone** next to a user to get a QR code for Hiddif
  DormVPN app ─────┼─HTTPS─▶ API (Lambda + function URL) ◀──▶ DynamoDB: users, limits, usage
  VPN server meter ┘                          │ start/stop
                                              ▼
- DormVPN app ═══════ VLESS+REALITY :443 ═══▶ VPN server (EC2 t3.micro, Elastic IP)
+ DormVPN app ═══════ VLESS+REALITY :443 ═══▶ VPN server (Lightsail $5 plan, static IP)
 ```
 
 | Piece | What it does |
 |---|---|
 | API + panel (`server/api.py`, `server/panel.html`) | One Lambda function with a public HTTPS URL. Serves the admin panel, signs users in, hands the app its VPN settings and usage, and starts/stops the server. Keeps working while the VPN server is paused. |
 | User database | DynamoDB table `dormvpn`: users (passwords stored as PBKDF2 hashes), limits, monthly usage. |
-| VPN server | sing-box on Amazon Linux 2023 with BBR. No SSH port: it's managed with AWS SSM. It has IPv6 as well as IPv4 going out, because apps on phones and other dual-stack clients stop working if the exit can't reach IPv6 destinations. |
+| VPN server | sing-box on Amazon Linux 2023 with BBR, on a $5/month AWS Lightsail plan with 1 TB of data included. Only TCP 443 is open (no SSH). It has IPv6 as well as IPv4 going out, because apps on phones and other dual-stack clients stop working if the exit can't reach IPv6 destinations. |
 | Usage meter (`server/dormvpn-meter.py`) | Runs on the server every minute. Pulls the user list from the API, rebuilds sing-box's user list when it changes, counts each user's traffic with nftables, blocks anyone over their limit, reports usage back, and can pause the server when idle. |
-| `server/deploy.ps1` | Creates or updates all of the above. Safe to re-run: it only replaces the VPN instance when its setup changed, and the IP stays the same. |
+| `server/deploy.ps1` | Creates or updates all of the above. Safe to re-run: it only replaces the VPN instance when its setup changed, and the IP stays the same. An install made by an older version, with its server on EC2, moves to Lightsail and the EC2 server is deleted. |
 
 ## Limits and costs
 
 - Usage is counted per calendar month (UTC) and resets on the 1st. "Used" is upload + download, because AWS charges both directions as data out.
 - A user who goes over their limit is cut off within a minute. Raising their limit lets them straight back in.
-- The **monthly cap** cuts everyone off once the total reaches it. It starts at 90 GB, which keeps you inside AWS's free 100 GB of data (shared with anything else on the account).
-- The **spending limit** (set in the wizard, default $15/month) is an AWS budget for DormVPN's region only. It emails you at 80% and 100%, and at 100% the server stops itself. It counts real usage even while credits are paying. A stopped server still costs about $4.40/month for its IP and disk, and AWS updates budgets a few times a day, so the stop can land a little after the limit. Keep DormVPN in a region your other AWS projects don't use.
-- **Auto-pause** stops the server after a set time with no traffic. With "Users can start a paused server" on, the app offers a **Start server** button, so the server only runs while someone uses it.
+- The **monthly cap** cuts everyone off once the total reaches it. It starts at 450 GB. The $5 Lightsail plan includes 1 TB a month, but Lightsail counts data both into and out of the server, and a VPN moves each byte twice (from the site to the server, then from the server to the user), so 450 GB of use is about 900 GB on the plan.
+- The **spending limit** (set in the wizard, default $15/month) is an AWS budget for DormVPN's regions only. It emails you at 80% and 100%. It counts real usage even while credits are paying. Keep DormVPN in regions your other AWS projects don't use.
+- **Auto-pause** stops the server after a set time with no traffic. On Lightsail a paused server still costs the full $5, so it only matters if you want the server off when nobody uses it.
 
-AWS list prices in `eu-west-3` (Paris):
+The server runs in a region with Lightsail (Frankfurt, Paris, London, Ireland, Stockholm, Spain, and others). The admin panel and user database stay in the region you picked first, so an older install in a region without Lightsail, like Milan, keeps its panel there and puts its server in `server_region` from `data\secrets.json` (Frankfurt if you set `eu-central-1`).
+
+AWS list prices:
 
 | Part | Per month |
 |---|---|
-| `t3.micro` instance, running all month | $8.61 (nothing while paused) |
-| Public IPv4 address | $3.65 |
-| 8 GB disk | $0.74 |
+| Lightsail `nano_3_0` server (2 vCPU, 512 MB, 20 GB disk, static IP, 1 TB data) | $5 |
 | API, panel, database | a few cents |
-| Data out | first 100 GB free per account, then about $0.09/GB |
+| Data over 1 TB | about $0.09/GB |
 
 ## If a site or app still refuses
 

@@ -4,6 +4,12 @@
 set -euo pipefail
 exec > /var/log/dormvpn-setup.log 2>&1
 
+# --- swap: the $5 Lightsail plan has 512 MB, and dnf alone needs more (it gets killed without this)
+if ! swapon --show | grep -q /swapfile; then
+  fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+fi
+
 # --- TCP tuning: BBR keeps throughput up on lossy routes (2-6 Mbps -> ~26 Mbps in testing)
 cat > /etc/sysctl.d/99-dormvpn.conf <<'EOF'
 net.core.default_qdisc = fq
